@@ -34,7 +34,6 @@ This is a dynamic Python-based graphical user interface (GUI) designed for music
 Place all files in a dedicated folder, ensuring the following structure:
 
 /Midi-Sender-App/
-
 ├── SendMidiGui.py        <-- The main script
 ├── MidiList-DEFAULT.csv  <-- Master list of all available patches
 ├── sendmidi.exe          <-- The external MIDI sender tool
