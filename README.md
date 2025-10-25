@@ -1,21 +1,20 @@
-# 🚀 MIDI Patch Sender GUI (Original Version)
+# 🚀 MIDI Patch Sender GUI
 
-VERSION: 1.0
-DATE:    2025-06-15
+REVISION: 1.1
+DATE:     2025-10-25
 
-This is the initial version of the Python-based graphical user interface (GUI) designed to send MIDI Program Change (PC) and Control Change (CC) messages, with automated switching between **Bluetooth** and **USB Direct** connections.
+This is a dynamic Python-based graphical user interface (GUI) designed for musicians to quickly send MIDI Program Change (PC) and Control Change (CC) messages to connected MIDI devices, with a focus on seamless switching between **Bluetooth** (WIDI/loopMIDI) and **USB** (Morningstar MC8/Quad Cortex) connections.
 
 ---
 
 ## ✨ Key Features
 
-* **Core MIDI Control:** Loads MIDI patches from a central `MidiList.csv` or a specific setlist file and displays them as clickable buttons.
-* **Dual Connection Modes:** Supports two primary modes:
-    * **Bluetooth (Default):** Sends MIDI to `loopMIDI Port`.
-    * **USB Direct:** Sends MIDI to `Morningstar MC8 Pro` (with specialized routing for Quad Cortex via Channel 1).
-* **Automatic Failover (USB to BT):** If the USB device disconnects while in **USB Direct** mode, the application prompts the user and automatically relaunches in the stable **Bluetooth** mode.
-* **Automatic Failback (BT to USB):** If a stable USB connection is detected while in **Bluetooth** mode, the application prompts the user to switch back to the **USB Direct** mode.
-* **Setlist Management:** Prompts at launch to load predefined setlist files (`.txt`) from the `Setlist` folder to reorder and filter patches.
+* **Dynamic Patch Loading:** Loads MIDI patches from a central `MidiList.csv` or a specific setlist file.
+* **Connection Mode Selection:** Prompt at launch to select **Bluetooth**, **USB Direct**, or **Hybrid USB** mode.
+* **Automatic Failover (USB to BT):** If a USB device disconnects while in a USB-based mode, the application prompts and automatically relaunches in the stable **Bluetooth** mode.
+* **Automatic Failback (BT to USB):** If stable USB connection is re-detected while in **Bluetooth** mode, the application prompts to switch back to the last preferred USB mode.
+* **USB Failover Lock (New):** A lock button in the main GUI to **disable** the automatic failover/failback prompts, allowing continuous USB monitoring without interrupting the current session.
+* **Setlist Management:** Load predefined setlist files (`.txt`) from the `Setlist` folder to quickly reorder and filter patches.
 
 ---
 
@@ -25,18 +24,14 @@ This is the initial version of the Python-based graphical user interface (GUI) d
 
 1.  **Python 3:** The script requires a Python 3 installation.
 2.  **sendmidi:** The external command-line tool `sendmidi.exe` is required to communicate with MIDI ports.
-
-### Required MIDI Ports
-
-The script monitors for and sends to the following devices:
-
-* `loopMIDI Port` (or equivalent Bluetooth virtual port) for **Bluetooth (Default)** mode.
-* `Morningstar MC8 Pro` for **USB Direct** mode.
-* `Quad Cortex MIDI Control` (Monitored for stability and used for Channel 1 routing).
+3.  **Required MIDI Ports:**
+    * `loopMIDI Port` (or equivalent Bluetooth virtual port) for **Bluetooth (Default)** mode.
+    * `Morningstar MC8 Pro` for **USB Direct** and **Hybrid USB** modes.
+    * `Quad Cortex MIDI Control` for proper MIDI routing in USB-based modes.
 
 ### Recommended File Structure
 
-Place all files in a dedicated folder:
+Place all files in a dedicated folder, ensuring the following structure:
 
 /Midi-Sender-App/
 ├── SendMidiGui.py        <-- The main script
@@ -54,7 +49,7 @@ Place all files in a dedicated folder:
 
 ### 1. MIDI Commands (`MidiList-DEFAULT.csv`)
 
-Each row in the CSV defines a patch button.
+The core functionality relies on the CSV file. Each row defines a patch button.
 
 | Column | Description | Example Value |
 | :--- | :--- | :--- |
@@ -80,7 +75,9 @@ Create a plain text file (`.txt`) in the `Setlist` folder.
 
 1.  **Run the script:** Double-click `SendMidiGui.py`.
 2.  **Load Setlist:** A prompt will appear asking to load a Setlist or the Default songs.
-3.  **Select Mode:** Choose between **Bluetooth (Default)** or **USB Direct**.
-4.  **Main GUI:** The application window will launch.
+3.  **Select Mode:** Choose your preferred connection mode (**Bluetooth**, **USB Direct**, or **Hybrid**).
+4.  **Main GUI:** The main application window will appear on the side of your screen.
 5.  **Click to Send:** Click a patch button to send the corresponding MIDI commands.
-6.  **Automatic Mode Switching:** The application constantly monitors the USB connection. If a device connects or disconnects, an automatic prompt will appear on your screen, offering to switch connection modes or confirming the automatic failover.
+6.  **USB Failover Lock:** Click the **USB Lock** button once to **disable** the automatic pop-up prompts (the lock icon will appear). Double-click to **enable** the lock (a message will confirm activation). The monitoring loop continues running regardless of the lock state.
+
+The mode display at the top of the GUI shows the currently active MIDI port, and the lock button's color dynamically indicates the presence of the required USB devices.
