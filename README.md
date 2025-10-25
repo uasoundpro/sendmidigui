@@ -23,7 +23,7 @@ This is a dynamic Python-based graphical user interface (GUI) designed for music
 ### Dependencies
 
 1.  **Python 3:** The script requires a Python 3 installation.
-2.  **sendmidi:** The external command-line tool `sendmidi.exe` is required to communicate with MIDI ports.  You can find this FANTASTIC program here, none of this would be functionally possible without it: [http://www.g](https://github.com/gbevin/SendMIDI)
+2.  **sendmidi:** The external command-line tool `sendmidi.exe` is required to communicate with MIDI ports.  You can find this FANTASTIC program here, none of this would be functionally possible without it: https://github.com/gbevin/SendMIDI
 3.  **Required MIDI Ports:**
     * `loopMIDI Port` (or equivalent Bluetooth virtual port) for **Bluetooth (Default)** mode.
     * `Morningstar MC8 Pro` for **USB Direct** and **Hybrid USB** modes.
