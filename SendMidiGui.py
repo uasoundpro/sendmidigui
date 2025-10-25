@@ -14,20 +14,19 @@ import shutil
 # =================== MIDI DEVICE SETUP =====================
 DEFAULT_DEVICE = "loopMIDI Port"
 ALT_DEVICE = "Morningstar MC8 Pro"
-QUAD_CORTEX_DEVICE = "Quad Cortex MIDI Control"  # Added new device for monitoring
-HYBRID_DEVICE = "Morningstar MC8 Pro (Hybrid)" # New constant for the Hybrid mode logic
-
-# --- MODIFIED: Locate sendmidi.exe relative to the script's directory ---
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # New constant for clarity
-SENDMIDI_PATH = os.path.join(SCRIPT_DIR, "sendmidi", "sendmidi.exe") 
-# --- END MODIFIED SECTION ---
-
+# USB_DIRECT_DEVICE is the name used internally by sendmidi for the MC8 (USB Direct)
+USB_DIRECT_DEVICE = "Morningstar MC8 Pro" 
+# HYBRID_DEVICE is the name used internally by sendmidi for the MC8 (Hybrid mode)
+HYBRID_DEVICE = "Morningstar MC8 Pro" 
+QUAD_CORTEX_DEVICE = "Quad Cortex MIDI Control"
+SENDMIDI_PATH = "C:\\Tools\\sendmidi\\sendmidi.exe"
+RECEIVEMIDI_PATH = "C:\\Tools\\receivemidi\\receivemidi.exe"
 ICON_FILE = "sendmidi.ico"
 SCRIPT_PATH = os.path.abspath(__file__)
-CSV_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv")  # This will be updated dynamically
+CSV_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv")
 CONFIG_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "config.json")
 SETLIST_FOLDER = os.path.join(os.path.dirname(SCRIPT_PATH), "Setlist")
-CSV_FILE_DEFAULT_SOURCE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList-DEFAULT.csv")  # Added for clarity
+CSV_FILE_DEFAULT_SOURCE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList-DEFAULT.csv")
 
 # ================ DARK THEME COLORS ===============
 DARK_BG = "#1e1e1e"
@@ -38,16 +37,29 @@ DISABLED_BG = "#555555"
 HIGHLIGHT_BG = "#5b82a7"
 SCROLLBAR_COLOR = "#444444"
 
+# --- STATUS COLORS FOR CHECKBOX ---
+USB_AVAILABLE_COLOR = "#2a8f44" # Green
+USB_UNAVAILABLE_COLOR = "#b02f2f" # Red
+USB_AVAILABLE_ACTIVE_COLOR = "#207030" # Darker Green for click active
+USB_UNAVAILABLE_ACTIVE_COLOR = "#902020" # Darker Red for click active
+# --- END STATUS COLORS ---
+
 big_font = ("Comic Sans MS", 20)
 narrow_font_plain = ("Arial", 10)
 narrow_font_small = ("Arial", 9)
 
-# Declare setlist_display_label as a global variable so it can be consistently accessed
+# Declare labels as global variables so they can be consistently accessed
 setlist_display_label = None
+mode_label = None
+usb_lock_checkbox = None # Added for global access in monitor_midi_device
 
+# Global variable for receivemidi process
+_receivemidi_process = None
+_receivemidi_stdout_thread = None
+_receivemidi_stderr_thread = None
 
 # =================== GLOBAL CONFIG MANAGEMENT =====================
-def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, current_setlist_display_name=None, last_usb_device=None, usb_lock_active=None):
+def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, current_setlist_display_name=None, usb_lock_active=None):
     """Saves application configuration to config.json."""
     config = {}
     if os.path.exists(CONFIG_FILE):
@@ -64,9 +76,7 @@ def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, 
         config["relaunch_on_monitor_fail"] = relaunch_on_monitor_fail
     if current_setlist_display_name is not None:
         config["current_setlist_display_name"] = current_setlist_display_name
-    if last_usb_device is not None:
-        config["last_usb_device"] = last_usb_device # New config setting
-    if usb_lock_active is not None: # New lock state
+    if usb_lock_active is not None:
         config["usb_lock_active"] = usb_lock_active
     config["last_run"] = time.time()  # Always update last_run
     with open(CONFIG_FILE, "w") as f:
@@ -80,18 +90,26 @@ def create_ordered_setlist_csv(setlist_path, base_csv_path, output_csv_path):
     Songs not found in the base CSV will be marked as '# MISSING'.
     """
     try:
-        with open(setlist_path, "r", encoding="utf-8") as f:
-            song_names = [line.strip() for line in f if line.strip()]
+        # Try reading with utf-8 first, then fall back to latin-1
+        try:
+            with open(setlist_path, "r", encoding="utf-8") as f:
+                song_names = [line.strip() for line in f if line.strip()]
+        except UnicodeDecodeError:
+            with open(setlist_path, "r", encoding="latin-1") as f:
+                song_names = [line.strip() for line in f if line.strip()]
 
-        with open(base_csv_path, "r", encoding="utf-8") as f:
-            all_rows = [row for row in csv.reader(f.read().splitlines()) if row]
+        try:
+            with open(base_csv_path, "r", encoding="utf-8") as f:
+                all_rows = [row for row in csv.reader(f.read().splitlines()) if row]
+        except UnicodeDecodeError:
+            with open(base_csv_path, "r", encoding="latin-1") as f:
+                all_rows = [row for row in csv.reader(f.read().splitlines()) if row]
+
         label_lookup = {row[0].strip(): row for row in all_rows}
-        # Fix: Removed duplicate 'k' in dictionary comprehension
         lower_keys = {k.lower(): k for k in label_lookup}
 
         pinned_top = ["MUTE", "DEFAULT (JCM800)", "DEFAULT (RVerb)"]
-        pinned_bottom = ["TEST 123"]
-        all_requested = pinned_top + song_names + pinned_bottom
+        all_requested = pinned_top + song_names + ["TEST 123"] # Always add test at bottom
 
         output_rows = []
         for name in all_requested:
@@ -116,6 +134,48 @@ def create_ordered_setlist_csv(setlist_path, base_csv_path, output_csv_path):
         shutil.copyfile(base_csv_path, output_csv_path)
 
 
+# =================== MIDI RECEIVE PROCESS MANAGEMENT =====================
+def _read_receivemidi_output(pipe, stream_name):
+    """Reads output from a pipe and prints it to the console."""
+    global _receivemidi_process
+    while _receivemidi_process and _receivemidi_process.poll() is None:  # Continue as long as process is running
+        line = pipe.readline()
+        if line:
+            print(f"[receivemidi {stream_name}]: {line.strip()}")
+        else:
+            # If pipe is empty and process is still running, wait a bit
+            time.sleep(0.01)  # Small delay to prevent busy-waiting
+    # After process has exited, read any remaining output
+    for line in pipe.readlines():
+        print(f"[receivemidi {stream_name}]: {line.strip()}")
+    print(f"receivemidi {stream_name} reader thread finished.")
+
+
+def kill_receivemidi():
+    """Terminates the receivemidi process and its output threads if it's running."""
+    global _receivemidi_process, _receivemidi_stdout_thread, _receivemidi_stderr_thread
+    if _receivemidi_process and _receivemidi_process.poll() is None:  # Check if process is still running
+        try:
+            print("Attempting to terminate receivemidi process...")
+            _receivemidi_process.terminate()  # Request termination
+            _receivemidi_process.wait(timeout=2)  # Wait a bit for it to terminate
+            print("receivemidi process terminated.")
+        except Exception as e:
+            print(f"Error terminating receivemidi process: {e}")
+
+    _receivemidi_process = None  # Clear the process reference
+
+    # Join the threads to ensure they finish gracefully
+    if _receivemidi_stdout_thread and _receivemidi_stdout_thread.is_alive():
+        _receivemidi_stdout_thread.join(timeout=1)
+    if _receivemidi_stderr_thread and _receivemidi_stderr_thread.is_alive():
+        _receivemidi_stderr_thread.join(timeout=1)
+
+    _receivemidi_stdout_thread = None
+    _receivemidi_stderr_thread = None
+    print("receivemidi cleanup complete.")
+
+
 # =================== SETLIST SELECTION PROMPT (initial launch) =====================
 def choose_setlist():
     config = {}
@@ -134,7 +194,6 @@ def choose_setlist():
 
     def launch_with(file_path_for_csv, display_name):
         # Always copy the chosen or default CSV to the main MidiList.csv path
-        # This makes it consistent for the main app to always read from CSV_FILE
         temp_path = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv")
         if os.path.abspath(file_path_for_csv) != os.path.abspath(temp_path):
             shutil.copyfile(file_path_for_csv, temp_path)
@@ -170,7 +229,8 @@ def choose_setlist():
 
         scrollable_buttons_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_frame, width=e.width))
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)),
+                                                                      "units") if canvas.winfo_exists() else None)
 
         if not os.path.exists(SETLIST_FOLDER):
             os.makedirs(SETLIST_FOLDER)
@@ -205,18 +265,29 @@ def choose_setlist():
         temp_csv = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList_Set.csv")
         create_ordered_setlist_csv(selected_setlist_path, CSV_FILE_DEFAULT_SOURCE, temp_csv)
 
-        # Read the first line of the selected .txt file for display name
-        display_name = ""
+        # Initialize display_name with a fallback (filename)
+        display_name = os.path.basename(selected_setlist_path).replace(".txt", "")
         try:
             with open(selected_setlist_path, "r", encoding="utf-8") as f:
-                display_name = f.readline().strip()
-        except Exception as e:  # Corrected indentation
+                first_line_content = f.readline().strip()
+                if first_line_content:  # Only update if first line is not empty
+                    display_name = first_line_content
+        except Exception as e:
             print(f"Error reading first line of {selected_setlist_path}: {e}")
 
-        if not display_name:  # Fallback to filename if first line is empty or error
-            display_name = os.path.basename(selected_setlist_path).replace(".txt", "")
+        if selected_setlist_path.endswith(".txt"):
+            temp_csv = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList_Set.csv")
+            create_ordered_setlist_csv(selected_setlist_path, CSV_FILE_DEFAULT_SOURCE, temp_csv)
+            # CSV_FILE is not globally updated here, the main app reads the config
+            current_setlist_name_for_display = display_name  # Use the determined display_name
+        else:  # It's already a CSV (like MidiList-DEFAULT.csv)
+            # CSV_FILE is not globally updated here, the main app reads the config
+            current_setlist_name_for_display = "Default Songs"
 
-        launch_with(temp_csv, display_name)
+        save_config(csv_file_used=temp_csv,
+                    current_setlist_display_name=current_setlist_name_for_display)  # Save the new chosen CSV file and display name
+
+        choose_device_and_launch()
 
     # --- Initial setlist prompt always appears normally ---
     setlist_window = tk.Tk()
@@ -261,39 +332,20 @@ def choose_device_and_launch():
         launch_main_app()
         return
 
-    def select_device(device_name):
+    def select_device(mode):
         chooser.destroy()
-        selected = DEFAULT_DEVICE if device_name == "BT" else ALT_DEVICE if device_name == "USB" else HYBRID_DEVICE
+        if mode == "BT":
+            selected = DEFAULT_DEVICE
+        elif mode == "HYBRID":
+            selected = HYBRID_DEVICE 
+        elif mode == "USB_DIRECT":
+            selected = USB_DIRECT_DEVICE
+        else: # Should not happen, fallback
+            selected = DEFAULT_DEVICE
         
-        # Check if selected is a USB-based mode and update config accordingly
-        if selected == ALT_DEVICE or selected == HYBRID_DEVICE:
-            save_config(device=selected, last_usb_device=selected)
-        else:
-            save_config(device=selected)
-            
+        save_config(device=selected)  # Use the unified save_config
         os.environ["MIDI_DEVICE"] = selected
-        launch_main_app()
-
-    def select_from_list(device_name, window):
-        nonlocal list_devices_chooser_popup_instance  # Declare nonlocal to reset instance
-
-        window.destroy()
-        list_devices_chooser_popup_instance = None  # Reset instance variable when closed programmatically
-
-        chooser.destroy()
-
-        # Map Quad Cortex to ALT_DEVICE for consistent behavior
-        actual_device_to_set = device_name
-        if device_name == QUAD_CORTEX_DEVICE:
-            actual_device_to_set = ALT_DEVICE
-
-        # Check if selected is a USB-based mode and update config accordingly
-        if actual_device_to_set == ALT_DEVICE or actual_device_to_set == HYBRID_DEVICE:
-             save_config(device=actual_device_to_set, last_usb_device=actual_device_to_set)
-        else:
-             save_config(device=actual_device_to_set)
-        
-        os.environ["MIDI_DEVICE"] = actual_device_to_set
+        os.environ["MODE_TYPE"] = mode # Pass the mode type
         launch_main_app()
 
     def timeout_default():
@@ -302,6 +354,7 @@ def choose_device_and_launch():
             chooser.destroy()
             save_config(device=DEFAULT_DEVICE)  # Use the unified save_config
             os.environ["MIDI_DEVICE"] = DEFAULT_DEVICE
+            os.environ["MODE_TYPE"] = "BT"
             launch_main_app()
 
     # Instance variable for the "List MIDI Devices" popup in the chooser window
@@ -372,30 +425,63 @@ def choose_device_and_launch():
             )
             btn.pack(pady=5)
 
+    def select_from_list(device_name, window):
+        nonlocal list_devices_chooser_popup_instance  # Declare nonlocal to reset instance
+
+        window.destroy()
+        list_devices_chooser_popup_instance = None  # Reset instance variable when closed programmatically
+
+        chooser.destroy()
+
+        # Determine the mode based on the device name
+        mode_type = "UNKNOWN"
+        actual_device_to_set = device_name
+
+        if device_name == USB_DIRECT_DEVICE:
+            mode_type = "USB_DIRECT"
+        elif device_name == HYBRID_DEVICE:
+            mode_type = "HYBRID"
+        elif device_name == DEFAULT_DEVICE:
+            mode_type = "BT"
+        elif device_name == QUAD_CORTEX_DEVICE:
+            # If QC is selected directly, treat it as USB Direct/MC8 as that's the intended path
+            actual_device_to_set = USB_DIRECT_DEVICE
+            mode_type = "USB_DIRECT"
+        
+        # If the user selects a custom device, we assume it's like Hybrid (no receivemidi)
+        if mode_type == "UNKNOWN":
+            mode_type = "CUSTOM_NO_RX"
+
+        save_config(device=actual_device_to_set)
+        os.environ["MIDI_DEVICE"] = actual_device_to_set
+        os.environ["MODE_TYPE"] = mode_type
+        launch_main_app()
+
     chooser = tk.Tk()
     chooser.title("Select MIDI Device")
     chooser.configure(bg=DARK_BG)
-    chooser.geometry("700x350+{}+{}".format(
-        chooser.winfo_screenwidth() // 2 - 350,
+    chooser.geometry("900x550+{}+{}".format( # Adjusted height for vertical stacking
+        chooser.winfo_screenwidth() // 2 - 450,
         chooser.winfo_screenheight() // 2 - 175
     ))
-    tk.Label(chooser, text="Select MIDI Device:", bg=DARK_BG, fg=DARK_FG, font=big_font).pack(pady=10)
+    tk.Label(chooser, text="Select MIDI Device Mode:", bg=DARK_BG, fg=DARK_FG, font=big_font).pack(pady=10)
 
     btn_frame = tk.Frame(chooser, bg=DARK_BG)
     btn_frame.pack(pady=5)
 
-    btn_bt = tk.Button(btn_frame, text="Bluetooth (Default)", font=narrow_font_plain, width=15, height=2,
+    # --- Vertical Stacking of Device Buttons (Initial Chooser) ---
+    btn_bt = tk.Button(btn_frame, text="BT (Default)", font=big_font, width=30, height=2,
                        command=lambda: select_device("BT"), bg="#2a8f44", fg="white")
-    btn_bt.grid(row=0, column=0, padx=5)
+    btn_bt.grid(row=0, column=0, pady=5, padx=5)
 
-    # Added Hybrid Mode Button
-    btn_hybrid = tk.Button(btn_frame, text="Hybrid (Morningstar)", font=narrow_font_plain, width=15, height=2,
-                           command=lambda: select_device("HYBRID"), bg="#8f5728", fg="white")
-    btn_hybrid.grid(row=0, column=1, padx=5)
-    
-    btn_usb = tk.Button(btn_frame, text="USB (Direct)", font=narrow_font_plain, width=15, height=2,
-                        command=lambda: select_device("USB"), bg="#28578f", fg="white")
-    btn_usb.grid(row=0, column=2, padx=5)
+    btn_usb_direct = tk.Button(btn_frame, text="USB Direct\n(Uses receivemidi)", font=big_font, width=30, height=2,
+                        command=lambda: select_device("USB_DIRECT"), bg="#b02f2f", fg="white")
+    btn_usb_direct.grid(row=1, column=0, pady=5, padx=5)
+
+    btn_hybrid = tk.Button(btn_frame, text="Hybrid\n(No receivemidi)", font=big_font, width=30, height=2,
+                        command=lambda: select_device("HYBRID"), bg="#28578f", fg="white")
+    btn_hybrid.grid(row=2, column=0, pady=5, padx=5)
+    # --- END Vertical Stacking ---
 
     btn_list = tk.Button(chooser, text="List MIDI Devices", font=narrow_font_plain, command=list_devices,
                          bg="#444444", fg=DARK_FG, activebackground=BUTTON_HL, activeforeground=DARK_FG, bd=0, padx=6,
@@ -410,7 +496,7 @@ def choose_device_and_launch():
     def countdown():
         # Only run countdown if the chooser window still exists
         if chooser.winfo_exists() and timer_count[0] > 0:
-            timer_label.config(text=f"Defaulting to Bluetooth in {timer_count[0]}s")
+            timer_label.config(text=f"Defaulting to BT in {timer_count[0]}s")
             timer_count[0] -= 1
             chooser.after(1000, countdown)
         elif chooser.winfo_exists() and timer_count[0] == 0:
@@ -419,14 +505,12 @@ def choose_device_and_launch():
     countdown()
     chooser.mainloop()
 
-
 # =================== LAUNCH MAIN GUI =====================
 def launch_main_app():
-    global CSV_FILE, setlist_display_label  # Declare setlist_display_label as global here
+    global CSV_FILE, setlist_display_label, mode_label, usb_lock_checkbox # Declare labels as global
+
     MIDI_DEVICE = os.environ.get("MIDI_DEVICE", DEFAULT_DEVICE)
-    
-    # Use the base ALT_DEVICE name for sendmidi execution if in Hybrid mode
-    SEND_DEVICE = ALT_DEVICE if MIDI_DEVICE == HYBRID_DEVICE else MIDI_DEVICE
+    MODE_TYPE = os.environ.get("MODE_TYPE", "BT") # Retrieve the mode type
 
     root = tk.Tk()
     root.title("MIDI Patch Sender")
@@ -448,7 +532,14 @@ def launch_main_app():
     y = 0
     root.geometry(f"{window_width}x{window_height}+{x}+{y}")
 
-    # Load config to check if this launch is due to monitor failure and get setlist name/lock state
+    def on_close():
+        kill_receivemidi()  # Ensure receivemidi is killed on app close
+        save_config(device=MIDI_DEVICE)  # Use the unified save_config
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+
+    # Load config to check if this launch is due to monitor failure and get setlist name
     config = {}
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
@@ -457,43 +548,35 @@ def launch_main_app():
             except json.JSONDecodeError:
                 config = {}
 
-    def on_close():
-        # Save lock state before closing
-        save_config(device=MIDI_DEVICE, usb_lock_active=usb_lock_active)
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", on_close)
-
-
     # If this launch was due to monitor failure, reset the flag in config
     if config.get("relaunch_on_monitor_fail"):
         save_config(relaunch_on_monitor_fail=False)
 
     current_setlist_name_for_display = config.get("current_setlist_display_name", "Unknown Setlist")
 
-    last_press_time = 0  # Moved to main app scope
-    last_selected_button = None  # Moved to main app scope
-    all_buttons = []  # Moved to main app scope
-    testing_toast_label = None  # To manage the "TESTING" toast
-    usb_stable_start_time = None  # New variable for failback stability tracking
-    user_declined_usb_switch = False # New flag to track if the user declined the USB switch
-    
-    # --- New USB Lock Variables ---
-    usb_lock_active = config.get("usb_lock_active", False)
-    usb_lock_last_press = [0]
-    double_click_success = [False]
-    # --- End USB Lock Variables ---
+    # USB Lock Variable Initialization
+    initial_usb_lock_state = config.get("usb_lock_active", False) # Default to False if not in config
+    usb_lock_var = tk.BooleanVar(value=initial_usb_lock_state)
+
+    last_press_time = 0
+    last_selected_button = None
+    all_buttons = []
+    testing_toast_label = None
+    usb_stable_start_time = None
+    user_declined_usb_switch = False
+    _usb_disconnect_warning_shown = False # <-- ADDED: State for intermittent USB disconnect toast
 
     # Instance variables for managing single popup windows from the main GUI
     setlist_popup_window_instance = None
     list_devices_popup_window_instance = None
-    mode_selection_popup_instance = None # New instance tracker for mode selection popup
+    device_change_popup_instance = None 
+    device_switch_popup_instance = None
 
     def show_toast(msg, duration=2000, bg="#303030", fg="white"):
         # Destroy any existing general toast
         for widget in root.winfo_children():
-            if isinstance(widget,
-                          tk.Label) and widget.winfo_y() < 50 and widget != testing_toast_label:  # Heuristic to identify toast
+            # Heuristic to identify toast (small label near the top)
+            if isinstance(widget, tk.Label) and widget.winfo_y() < 50 and widget != testing_toast_label: 
                 widget.destroy()
 
         toast = tk.Label(root, text=msg, bg=bg, fg=fg, font=narrow_font_small)
@@ -501,30 +584,22 @@ def launch_main_app():
         root.after(duration, toast.destroy)
 
     def send_midi(command_list):
-        # Determine the effective target device for sendmidi.exe
-        target_device = SEND_DEVICE  # Base device (ALT_DEVICE or DEFAULT_DEVICE)
-        
         for command in command_list:
-            # --- Hybrid Mode Logic ---
-            if MIDI_DEVICE == HYBRID_DEVICE:
-                # In Hybrid mode, ALL commands are sent to the ALT_DEVICE (Morningstar MC8 Pro).
-                pass # target_device is already set to SEND_DEVICE (ALT_DEVICE)
+            # Determine the target device for the current command
+            target_device = MIDI_DEVICE  # Default target is the globally selected MIDI_DEVICE
 
-            # --- USB Direct Mode Logic (Original ALT_DEVICE behavior) ---
-            elif MIDI_DEVICE == ALT_DEVICE:
-                # Apply specific routing only when in ALT_DEVICE (Morningstar MC8 Pro) mode
+            # Specific routing applies only when targeting the MC8 (USB Direct or Hybrid)
+            if MIDI_DEVICE == USB_DIRECT_DEVICE or MIDI_DEVICE == HYBRID_DEVICE:
+                # Check if the command is a channel message (starts with "ch")
                 if len(command) > 1 and command[0] == "ch":
                     channel_str = command[1]  # The channel number as a string
                     if channel_str == "2":
-                        target_device = ALT_DEVICE  # Send channel 2 messages to Morningstar MC8 Pro
+                        # Channel 2 messages should always go to the MC8 itself (which is MIDI_DEVICE)
+                        target_device = MIDI_DEVICE
                     elif channel_str == "1":
-                        target_device = QUAD_CORTEX_DEVICE  # Send channel 1 messages to Quad Cortex MIDI Control
-                # If it's not a "ch" command, it will default to ALT_DEVICE.
-            
-            # --- Bluetooth Mode Logic (Original DEFAULT_DEVICE behavior) ---
-            else: # MIDI_DEVICE == DEFAULT_DEVICE
-                # All commands go to the DEFAULT_DEVICE (loopMIDI Port/Bluetooth)
-                target_device = DEFAULT_DEVICE
+                        # Channel 1 messages should go to the Quad Cortex
+                        target_device = QUAD_CORTEX_DEVICE
+                # If it's not a "ch" command, it defaults to the main MIDI_DEVICE (MC8)
 
             # Construct and run the subprocess command with the determined target_device
             full_cmd = [SENDMIDI_PATH, "dev", target_device]
@@ -532,28 +607,60 @@ def launch_main_app():
             full_cmd.extend([str(arg) for arg in command])
             subprocess.run(full_cmd)
 
+    # Helper function to launch receivemidi
+    def _launch_receivemidi_if_usb_direct():
+        """Helper function to launch receivemidi only if in USB_DIRECT mode."""
+        # Only launch if the mode is explicitly set to USB_DIRECT
+        if MODE_TYPE == "USB_DIRECT":
+            global _receivemidi_process, _receivemidi_stdout_thread, _receivemidi_stderr_thread
+            try:
+                # Command: receivemidi dev "Morningstar MC8 Pro" pass "Quad Cortex MIDI Control"
+                receivemidi_cmd = [
+                    RECEIVEMIDI_PATH,
+                    "dev", "Morningstar MC8 Pro",
+                    "pass", "Quad Cortex MIDI Control"
+                ]
+                print(f"Launching receivemidi: {' '.join(receivemidi_cmd)}")
+                _receivemidi_process = subprocess.Popen(receivemidi_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                        text=True)
+
+                # Start threads to read stdout and stderr
+                _receivemidi_stdout_thread = threading.Thread(target=_read_receivemidi_output,
+                                                              args=(_receivemidi_process.stdout, "stdout"))
+                _receivemidi_stderr_thread = threading.Thread(target=_read_receivemidi_output,
+                                                              args=(_receivemidi_process.stderr, "stderr"))
+                _receivemidi_stdout_thread.daemon = True
+                _receivemidi_stderr_thread.daemon = True
+                _receivemidi_stdout_thread.start()
+                _receivemidi_stderr_thread.start()
+
+                print(f"receivemidi process started with PID: {_receivemidi_process.pid}")
+            except FileNotFoundError:
+                show_toast(f"Error: {RECEIVEMIDI_PATH} not found. Please check the path.", bg="red", duration=5000)
+            except Exception as e:
+                show_toast(f"Error launching receivemidi: {e}", bg="red", duration=5000)
+
     # --- New functions for setlist selection from main GUI ---
     def show_setlist_selection_popup():
-        nonlocal setlist_popup_window_instance  # Declare nonlocal
+        nonlocal setlist_popup_window_instance
 
-        # Check if an instance of the setlist popup is already open
         if setlist_popup_window_instance and setlist_popup_window_instance.winfo_exists():
-            setlist_popup_window_instance.lift()  # Bring it to the front
+            setlist_popup_window_instance.lift()
             return
 
         setlist_popup = tk.Toplevel(root)
-        setlist_popup_window_instance = setlist_popup  # Store the instance
+        setlist_popup_window_instance = setlist_popup
 
         def on_setlist_popup_close():
             nonlocal setlist_popup_window_instance
-            setlist_popup_window_instance = None  # Reset the instance variable on close
+            setlist_popup_window_instance = None
             setlist_popup.destroy()
 
-        setlist_popup.protocol("WM_DELETE_WINDOW", on_setlist_popup_close)  # Handle window close event
+        setlist_popup.protocol("WM_DELETE_WINDOW", on_setlist_popup_close)
 
         setlist_popup.title("Select Setlist File")
         setlist_popup.configure(bg=DARK_BG)
-        setlist_popup.geometry("600x600+200+100")  # Adjust as needed
+        setlist_popup.geometry("600x600+200+100")
 
         tk.Label(setlist_popup, text="Choose a Setlist File:", font=("Comic Sans MS", 26), bg=DARK_BG, fg=DARK_FG).pack(
             pady=20)
@@ -568,14 +675,15 @@ def launch_main_app():
                                        bg=SCROLLBAR_COLOR, troughcolor=DARK_BG, highlightbackground=DARK_BG)
         scrollbar_popup.pack(side="right", fill="y")
 
-        canvas_popup.configure(yscrollcommand=scrollbar_popup.set)  # Corrected: use scrollbar_popup
+        canvas_popup.configure(yscrollcommand=scrollbar_popup.set)
         scrollable_buttons_frame_popup = tk.Frame(canvas_popup, bg=DARK_BG)
         canvas_frame_popup = canvas_popup.create_window((0, 0), window=scrollable_buttons_frame_popup, anchor="nw")
 
         scrollable_buttons_frame_popup.bind("<Configure>",
                                             lambda e: canvas_popup.configure(scrollregion=canvas_popup.bbox("all")))
         canvas_popup.bind("<Configure>", lambda e: canvas_popup.itemconfig(canvas_frame_popup, width=e.width))
-        canvas_popup.bind_all("<MouseWheel>", lambda e: canvas_popup.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        canvas_popup.bind_all("<MouseWheel>", lambda e: canvas_popup.yview_scroll(int(-1 * (e.delta / 120)),
+                                                                                  "units") if canvas_popup.winfo_exists() else None)
 
         # Add "Load Default Songs" button option at the top
         tk.Button(scrollable_buttons_frame_popup, text="Load Default Songs", font=("Arial", 13),
@@ -612,115 +720,137 @@ def launch_main_app():
                                 bg=BUTTON_BG, fg=DARK_FG, activebackground=BUTTON_HL, activeforeground=DARK_FG)
                 btn.pack(pady=5, padx=10)
 
+
+        setlist_popup.mainloop()
+
     def _process_selected_setlist_from_main_gui(selected_setlist_path, current_popup_window):
-        global CSV_FILE, setlist_display_label  # Access global setlist_display_label
-        nonlocal current_setlist_name_for_display  # Update the variable for display
-        nonlocal setlist_popup_window_instance  # Declare nonlocal to reset instance
+        global CSV_FILE, setlist_display_label
+        nonlocal current_setlist_name_for_display
+        nonlocal setlist_popup_window_instance
 
         current_popup_window.destroy()
-        setlist_popup_window_instance = None  # Reset instance variable when closed programmatically
+        setlist_popup_window_instance = None
+
+        temp_csv = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList_Set.csv")
 
         if selected_setlist_path.endswith(".txt"):
-            temp_csv = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList_Set.csv")
             create_ordered_setlist_csv(selected_setlist_path, CSV_FILE_DEFAULT_SOURCE, temp_csv)
             CSV_FILE = temp_csv
 
-            display_name = ""
+            display_name = os.path.basename(selected_setlist_path).replace(".txt", "")
             try:
                 with open(selected_setlist_path, "r", encoding="utf-8") as f:
-                    display_name = f.readline().strip()
-            except Exception as e:  # Corrected indentation
+                    first_line_content = f.readline().strip()
+                    if first_line_content:
+                        display_name = first_line_content
+            except Exception as e:
                 print(f"Error reading first line of {selected_setlist_path}: {e}")
 
-            if not display_name:  # Fallback to filename if first line is empty or error
-                display_name = os.path.basename(selected_setlist_path).replace(".txt", "")
-
             current_setlist_name_for_display = display_name
-        else:  # It's already a CSV (like MidiList-DEFAULT.csv)
-            CSV_FILE = selected_setlist_path
+        else:
+            # If default is selected, use the default source path directly
+            shutil.copyfile(selected_setlist_path, os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv"))
+            CSV_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv")
             current_setlist_name_for_display = "Default Songs"
 
         save_config(csv_file_used=CSV_FILE,
-                    current_setlist_display_name=current_setlist_name_for_display)  # Save the new chosen CSV file and display name
+                    current_setlist_display_name=current_setlist_name_for_display)
 
-        # Added check for setlist_display_label existence before configuring
         if setlist_display_label and setlist_display_label.winfo_exists():
-            setlist_display_label.config(text=f"Setlist: {current_setlist_name_for_display}")  # Update label
-        _load_and_display_patches()  # Reload patches with the new CSV_FILE
+            setlist_display_label.config(text=f"Setlist: {current_setlist_name_for_display}")
+
+        kill_receivemidi()
+        _load_and_display_patches()
         show_toast(f"Setlist loaded: {current_setlist_name_for_display}")
 
     # --- End of new setlist functions ---
-    
-    # --- New Mode Selection Functions ---
-    def select_mode_from_popup(new_device, popup_window):
-        nonlocal MIDI_DEVICE, user_declined_usb_switch, SEND_DEVICE, mode_selection_popup_instance
-        
-        popup_window.destroy()
-        mode_selection_popup_instance = None
 
-        # Check if selected is a USB-based mode and update config accordingly
-        if new_device == ALT_DEVICE or new_device == HYBRID_DEVICE:
-            save_config(device=new_device, last_usb_device=new_device)
-            user_declined_usb_switch = False # Reset decline flag on manual switch
-        else:
-            save_config(device=new_device)
+    def _set_device_mode(new_mode_type, new_device, should_relaunch=False):
+        nonlocal MIDI_DEVICE, MODE_TYPE, user_declined_usb_switch, _usb_disconnect_warning_shown # Added: _usb_disconnect_warning_shown
+        global mode_label # Access global mode_label
+
+        # 1. Update globals and config
+        kill_receivemidi()
+        save_config(device=new_device)
         
+        # 2. Update runtime variables
         os.environ["MIDI_DEVICE"] = new_device
+        os.environ["MODE_TYPE"] = new_mode_type
         MIDI_DEVICE = new_device
+        MODE_TYPE = new_mode_type
         
-        # Update SEND_DEVICE for the send_midi function logic
-        SEND_DEVICE = ALT_DEVICE if MIDI_DEVICE == HYBRID_DEVICE else MIDI_DEVICE
-        
-        mode_label.config(text=f"Using {MIDI_DEVICE}")
-        show_toast(f"Switched to {MIDI_DEVICE}")
+        # Update the status label on the main GUI (REMOVED MIDI_DEVICE tag)
+        if mode_label and mode_label.winfo_exists():
+             mode_label.config(text=f"Current Mode: {MODE_TYPE}")
 
-    def show_mode_selection_popup():
-        nonlocal mode_selection_popup_instance
-        
-        if mode_selection_popup_instance and mode_selection_popup_instance.winfo_exists():
-            mode_selection_popup_instance.lift()
+        # Reset decline flag if switching to a USB mode
+        if MODE_TYPE == "USB_DIRECT" or MODE_TYPE == "HYBRID":
+            user_declined_usb_switch = False
+            _usb_disconnect_warning_shown = False # Reset on mode switch to allow warning if it fails again
+            
+        # 3. Handle re-launch if requested (used for monitor fail/failback)
+        if should_relaunch:
+            save_config(relaunch_on_monitor_fail=True)
+            new_env = os.environ.copy()
+            subprocess.Popen([sys.executable, SCRIPT_PATH], env=new_env)
+            root.destroy()
             return
 
-        popup = tk.Toplevel(root)
-        mode_selection_popup_instance = popup
+        # 4. Handle receivemidi for the current instance (only launch for USB_DIRECT)
+        _launch_receivemidi_if_usb_direct()
+        show_toast(f"Switched to {MODE_TYPE} mode: {MIDI_DEVICE}")
 
-        def on_popup_close():
-            nonlocal mode_selection_popup_instance
-            mode_selection_popup_instance = None
+    def show_device_switch_popup():
+        nonlocal device_switch_popup_instance
+
+        if device_switch_popup_instance and device_switch_popup_instance.winfo_exists():
+            device_switch_popup_instance.lift()
+            return
+        
+        popup = tk.Toplevel(root)
+        device_switch_popup_instance = popup
+
+        def on_switch_popup_close():
+            nonlocal device_switch_popup_instance
+            device_switch_popup_instance = None
             popup.destroy()
 
-        popup.protocol("WM_DELETE_WINDOW", on_popup_close)
-        popup.title("Select MIDI Mode")
+        popup.protocol("WM_DELETE_WINDOW", on_switch_popup_close)
+        popup.title("Select MIDI Device Mode")
         popup.configure(bg=DARK_BG)
-        
-        # Calculate position for center
-        popup_width = 450
-        popup_height = 400
-        x_pos = (root.winfo_screenwidth() // 2) - (popup_width // 2)
-        y_pos = (root.winfo_screenheight() // 2) - (popup_height // 2)
-        popup.geometry(f"{popup_width}x{popup_height}+{x_pos}+{y_pos}")
+        popup.geometry("900x550+{}+{}".format( # Adjusted height for vertical stacking
+            popup.winfo_screenwidth() // 2 - 450,
+            popup.winfo_screenheight() // 2 - 175
+        ))
 
-        tk.Label(popup, text="Choose Connection Mode:", font=("Comic Sans MS", 18), bg=DARK_BG, fg=DARK_FG).pack(pady=20)
-        
-        modes = [
-            ("Bluetooth (Default)", DEFAULT_DEVICE, "#2a8f44"),
-            ("Hybrid USB (Recommended)", HYBRID_DEVICE, "#8f5728"),
-            ("USB Direct (No Failover)", ALT_DEVICE, "#28578f")
-        ]
-        
-        for display_name, device_constant, color in modes:
-            btn = tk.Button(popup, text=display_name, font=("Arial", 14), width=25, height=2,
-                            command=lambda dev=device_constant, p=popup: select_mode_from_popup(dev, p),
-                            bg=color, fg="white", activebackground="#555555", activeforeground="white")
-            btn.pack(pady=10)
-    # --- End New Mode Selection Functions ---
+        tk.Label(popup, text="Select New MIDI Device Mode:", bg=DARK_BG, fg=DARK_FG, font=big_font).pack(pady=10)
+
+        btn_frame = tk.Frame(popup, bg=DARK_BG)
+        btn_frame.pack(pady=20)
+
+        def switch_and_close(mode, device, current_popup):
+            _set_device_mode(mode, device)
+            current_popup.destroy()
+
+        # --- Vertical Stacking of Device Buttons (Switch Popup) ---
+        btn_bt = tk.Button(btn_frame, text="BT (Default)", font=big_font, width=30, height=2,
+                        command=lambda: switch_and_close("BT", DEFAULT_DEVICE, popup), bg="#2a8f44", fg="white")
+        btn_bt.pack(pady=5)
+
+        btn_usb_direct = tk.Button(btn_frame, text="USB Direct\n(Uses receivemidi)", font=big_font, width=30, height=2,
+                            command=lambda: switch_and_close("USB_DIRECT", USB_DIRECT_DEVICE, popup), bg="#b02f2f", fg="white")
+        btn_usb_direct.pack(pady=5)
+
+        btn_hybrid = tk.Button(btn_frame, text="Hybrid\n(No receivemidi)", font=big_font, width=30, height=2,
+                            command=lambda: switch_and_close("HYBRID", HYBRID_DEVICE, popup), bg="#28578f", fg="white")
+        btn_hybrid.pack(pady=5)
+        # --- END Vertical Stacking ---
 
     def list_devices():
-        nonlocal list_devices_popup_window_instance  # Declare nonlocal
+        nonlocal list_devices_popup_window_instance
 
-        # Check if an instance of the list devices popup is already open
         if list_devices_popup_window_instance and list_devices_popup_window_instance.winfo_exists():
-            list_devices_popup_window_instance.lift()  # Bring it to the front
+            list_devices_popup_window_instance.lift()
             return
 
         try:
@@ -728,7 +858,7 @@ def launch_main_app():
             device_list = result.stdout.strip().splitlines()
         except Exception as e:
             print(f"Error listing devices: {e}")
-            show_toast(f"Error listing devices: {e}")  # Show toast for error
+            show_toast(f"Error listing devices: {e}")
             return
 
         if not device_list:
@@ -736,14 +866,14 @@ def launch_main_app():
             return
 
         list_window = tk.Toplevel(root)
-        list_devices_popup_window_instance = list_window  # Store the instance
+        list_devices_popup_window_instance = list_window
 
         def on_list_devices_popup_close():
             nonlocal list_devices_popup_window_instance
-            list_devices_popup_window_instance = None  # Reset the instance variable on close
+            list_devices_popup_window_instance = None
             list_window.destroy()
 
-        list_window.protocol("WM_DELETE_WINDOW", on_list_devices_popup_close)  # Handle window close event
+        list_window.protocol("WM_DELETE_WINDOW", on_list_devices_popup_close)
 
         list_window.title("Available MIDI Devices")
         list_window.configure(bg=DARK_BG)
@@ -761,161 +891,122 @@ def launch_main_app():
             else:
                 active_devices.append(dev)
 
-        # Create buttons for active devices first
+        def select_new_device_from_list(device_name, window):
+            nonlocal list_devices_popup_window_instance
+
+            window.destroy()
+            list_devices_popup_window_instance = None
+
+            # Determine the mode based on the device name
+            mode_type = "UNKNOWN"
+            actual_device_to_set = device_name
+
+            if device_name == USB_DIRECT_DEVICE:
+                mode_type = "USB_DIRECT"
+            elif device_name == HYBRID_DEVICE:
+                mode_type = "HYBRID"
+            elif device_name == DEFAULT_DEVICE:
+                mode_type = "BT"
+            elif device_name == QUAD_CORTEX_DEVICE:
+                actual_device_to_set = USB_DIRECT_DEVICE
+                mode_type = "USB_DIRECT"
+            
+            if mode_type == "UNKNOWN":
+                mode_type = "CUSTOM_NO_RX"
+
+            # Update the device mode without re-launching the whole app
+            _set_device_mode(mode_type, actual_device_to_set, should_relaunch=False)
+
         for dev in active_devices:
             btn = tk.Button(
                 list_window, text=dev, font=narrow_font_plain, width=40, pady=10,
                 bg=BUTTON_BG, fg=DARK_FG,
                 activebackground=BUTTON_HL, activeforeground=DARK_FG,
-                command=(lambda d=dev: select_new_device(d, list_window))
+                command=(lambda d=dev: select_new_device_from_list(d, list_window))
             )
             btn.pack(pady=5)
 
-        # Then create buttons for disabled devices
         for dev in disabled_devices:
             btn = tk.Button(
                 list_window, text=dev, font=narrow_font_plain, width=40, pady=10,
                 bg=DISABLED_BG, fg="#999999",
-                activebackground=DISABLED_BG, activeforeground="#999999",  # No active highlight for disabled
+                activebackground=DISABLED_BG, activeforeground="#999999",
                 state="disabled"
             )
             btn.pack(pady=5)
-
-    def select_new_device(device_name, window):
-        nonlocal MIDI_DEVICE, user_declined_usb_switch, SEND_DEVICE  # Access required variables
-        nonlocal list_devices_popup_window_instance  # Declare nonlocal to reset instance
-
-        window.destroy()
-        list_devices_popup_window_instance = None  # Reset instance variable when closed programmatically
-
-        # Map Quad Cortex to ALT_DEVICE for consistent behavior
-        actual_device_to_set = device_name
-        if device_name == QUAD_CORTEX_DEVICE:
-            actual_device_to_set = ALT_DEVICE
-
-        # Check if selected is a USB-based mode and update config accordingly
-        if actual_device_to_set == ALT_DEVICE or actual_device_to_set == HYBRID_DEVICE:
-             save_config(device=actual_device_to_set, last_usb_device=actual_device_to_set)
-             user_declined_usb_switch = False
-        else:
-             save_config(device=actual_device_to_set)
-        
-        os.environ["MIDI_DEVICE"] = actual_device_to_set  # Ensure environment variable is updated
-        MIDI_DEVICE = actual_device_to_set  # Update the current MIDI_DEVICE
-        
-        # Update SEND_DEVICE for the send_midi function logic
-        SEND_DEVICE = ALT_DEVICE if MIDI_DEVICE == HYBRID_DEVICE else MIDI_DEVICE
-        
-        mode_label.config(text=f"Using {MIDI_DEVICE}")  # Update the display
-        show_toast(f"Switched to {MIDI_DEVICE}")
     
-    # --- New USB Lock Button Handlers ---
-    def update_usb_lock_button_display(is_present):
-        nonlocal usb_lock_active
-        # This function updates color and text based on three states:
-        # 1. Locked (usb_lock_active is True) -> Red
-        # 2. Unlocked and Present (is_present is True) -> Blue
-        # 3. Unlocked and Not Present (is_present is False) -> Yellow
-        
-        if usb_lock_active:
-            usb_lock_btn.config(text="USB Locked 🔒", bg="#b02f2f", fg="white") # Red
-        elif is_present:
-            usb_lock_btn.config(text="USB Lock 🔓", bg="#28578f", fg="white") # Blue
-        else:
-            usb_lock_btn.config(text="USB Lock 🔓", bg="#cccc00", fg="black") # Yellow
+    # --- GUI LAYOUT REVISION ---
 
-    def handle_usb_lock_click():
-        nonlocal usb_lock_active
-        now = time.time()
+    # 1. Status Frame (Device Monitor - TOP)
+    status_frame = tk.Frame(root, bg=DARK_BG)
+    status_frame.pack(fill="x", pady=2, padx=2)
 
-        # --- Double Click Check (Activation) ---
-        if now - usb_lock_last_press[0] < 0.3:
-            if not usb_lock_active:
-                # Double click: ACTIVATE LOCK
-                usb_lock_active = True
-                save_config(usb_lock_active=True)
-                show_toast("USB Failover Lock Activated 🔒", bg="#b02f2f")
-                update_usb_lock_button_display(True) # Force update immediately (doesn't matter if present or not, it's locked)
-                double_click_success[0] = True
-            
-            usb_lock_last_press[0] = 0 # Reset timer for double-click
-            return
+    # REMOVED MIDI_DEVICE tag
+    mode_label = tk.Label(status_frame, text=f"Current Mode: {MODE_TYPE}", fg=DARK_FG, bg=DARK_BG, font=("Arial", 12, "bold"))
+    mode_label.pack(side="left", padx=4)
 
-        # --- Single Click Check (Deactivation) ---
-        # Only execute single-click logic if a double-click was not just detected
-        if usb_lock_active and not double_click_success[0]:
-            # Single click: DEACTIVATE LOCK
-            usb_lock_active = False
-            save_config(usb_lock_active=False)
-            show_toast("USB Failover Lock Deactivated 🔓")
-            # Monitor thread will handle the color update next cycle.
-            update_usb_lock_button_display(True) # Use True here, as we don't know the presence state instantly
-            
-        # Reset double-click flag
-        double_click_success[0] = False
-        
-        usb_lock_last_press[0] = now # Store current time for double-click detection
+    # 2. Setlist Name Display Frame (Below Status)
+    setlist_display_frame = tk.Frame(root, bg=DARK_BG)
+    setlist_display_frame.pack(fill="x", pady=5)
 
-    # --- End USB Lock Button Handlers ---
+    setlist_display_label = tk.Label(setlist_display_frame, text=f"Setlist: {current_setlist_name_for_display}",
+                                     fg=DARK_FG, bg=DARK_BG, font=narrow_font_plain)
+    setlist_display_label.pack(side="left", padx=5)
 
-    # --- 1. Top Bar Frame (Control Buttons) ---
-    top_bar = tk.Frame(root, bg=DARK_BG)
-    top_bar.pack(fill="x", pady=2, padx=2)
+    # 3. Controls Frame (Buttons)
+    controls_frame = tk.Frame(root, bg=DARK_BG)
+    controls_frame.pack(fill="x", pady=5)
 
-    # Left-aligned buttons
-    switch_btn = tk.Button(top_bar, text="Switch Mode", font=narrow_font_plain, command=show_mode_selection_popup,
+    # Device Switch Button
+    switch_btn = tk.Button(controls_frame, text="Switch Mode", font=narrow_font_plain, command=show_device_switch_popup,
                            bg="#b02f2f", fg=DARK_FG, activebackground="#902020", activeforeground=DARK_FG, bd=0, padx=6,
                            pady=6, height=2)
-    switch_btn.pack(side="left")
+    switch_btn.pack(side="left", padx=(5, 0))
 
-    list_btn = tk.Button(top_bar, text="List MIDI Devices", font=narrow_font_plain,
+    # List Devices Button
+    list_btn = tk.Button(controls_frame, text="List MIDI Devices", font=narrow_font_plain,
                          command=list_devices, bg="#444444", fg=DARK_FG, activebackground=BUTTON_HL,
                          activeforeground=DARK_FG, bd=0, padx=6, pady=6, height=2)
     list_btn.pack(side="left", padx=(5, 0))
 
-    choose_setlist_btn = tk.Button(top_bar, text="Choose Setlist", font=narrow_font_plain,
+    # Choose Setlist Button
+    choose_setlist_btn = tk.Button(controls_frame, text="Choose Setlist", font=narrow_font_plain,
                                    command=show_setlist_selection_popup, bg="#444444", fg=DARK_FG,
                                    activebackground=BUTTON_HL,
                                    activeforeground=DARK_FG, bd=0, padx=6, pady=6, height=2)
     choose_setlist_btn.pack(side="left", padx=(5, 0))
-    
-    # Right-aligned USB Lock button
-    usb_lock_btn = tk.Button(top_bar, text="USB Lock", font=narrow_font_plain,
-                            command=handle_usb_lock_click, # Use command for single/double click handler
-                            bg="#28578f", fg="white", activebackground="#204070",
-                            activeforeground="white", bd=0, padx=6, pady=6, height=2)
-    usb_lock_btn.pack(side="right", padx=(5, 0))
-    
-    # Initial display update for the lock button (monitor will confirm presence shortly)
-    update_usb_lock_button_display(True) 
 
-    # --- 2. MIDI MODE DISPLAY ---
-    mode_display_frame = tk.Frame(root, bg=DARK_BG)
-    mode_display_frame.pack(fill="x", pady=(0, 5)) 
+    # USB Lock Checkbox (New Position)
+    usb_lock_checkbox = tk.Checkbutton(
+        controls_frame, 
+        text="Lock USB/Autoswitch", 
+        variable=usb_lock_var, 
+        command=lambda: save_config(usb_lock_active=usb_lock_var.get()),
+        bg=DARK_BG, 
+        fg=DARK_FG,
+        selectcolor=DARK_BG, 
+        activebackground=DARK_BG,
+        activeforeground=DARK_FG,
+        font=narrow_font_plain,
+        relief="raised", 
+        bd=2 
+    )
+    usb_lock_checkbox.pack(side="left", padx=(5, 0))
 
-    mode_label = tk.Label(mode_display_frame, text=f"Using {MIDI_DEVICE}", fg=DARK_FG, bg=DARK_BG, font=narrow_font_plain)
-    mode_label.pack(side="left", padx=5) 
+    # --- End GUI LAYOUT REVISION ---
 
-    # --- 3. Setlist Name Display Frame and Label ---
-    setlist_display_frame = tk.Frame(root, bg=DARK_BG)
-    setlist_display_frame.pack(fill="x", pady=5) 
-
-    setlist_display_label = tk.Label(setlist_display_frame, text=f"Setlist: {current_setlist_name_for_display}",
-                                     fg=DARK_FG, bg=DARK_BG, font=narrow_font_plain)
-    setlist_display_label.pack(side="left", padx=5)  
-    # --- End Setlist Name Display Frame and Label ---
 
     up_button_frame = tk.Frame(root, bg=DARK_BG)
     up_button_frame.pack(fill="x")
 
     def scroll_up():
-        btn_up.config(relief="sunken")  # Simulate press
+        btn_up.config(relief="sunken")
         canvas.yview_scroll(-1, "units")
-        root.after(150, lambda: btn_up.config(relief="raised"))  # Revert after short delay
+        root.after(150, lambda: btn_up.config(relief="raised"))
 
     btn_up = tk.Button(up_button_frame, text="↑", font=("Arial", 36, "bold"), height=1,
                        command=scroll_up, bg=BUTTON_BG, fg=DARK_FG, activebackground=BUTTON_HL,
-                       activeforeground=DARK_FG, relief="raised", bd=2)  # Added relief and bd
+                       activeforeground=DARK_FG, relief="raised", bd=2)
     btn_up.pack(fill="x")
 
     main_frame = tk.Frame(root, bg=DARK_BG)
@@ -937,7 +1028,8 @@ def launch_main_app():
     canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_frame, width=e.width))
     canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
-    def patch_func_factory(current_btn, label, prog1, prog2, cc):  # Modified: added current_btn
+
+    def patch_func_factory(current_btn, label, prog1, prog2, cc):
         def patch_func():
             nonlocal last_press_time, last_selected_button, testing_toast_label
             now = time.time()
@@ -945,97 +1037,135 @@ def launch_main_app():
                 return
             last_press_time = now
 
-            if last_selected_button and last_selected_button != current_btn:  # Used current_btn
+            if last_selected_button and last_selected_button != current_btn:
                 last_selected_button.config(bg=BUTTON_BG)
-            current_btn.config(bg=HIGHLIGHT_BG)  # Used current_btn
-            last_selected_button = current_btn  # Used current_btn
+            current_btn.config(bg=HIGHLIGHT_BG)
+            last_selected_button = current_btn
 
             for b in all_buttons:
                 b.config(state="disabled")
 
-            # --- MIDI Commands preparation ---
-            initial_commands = [
-                ["ch", "2", "pc", "127"],
-                ["ch", "1", "cc", "47", "2"],
-                ["ch", "1", "pc", str(prog1)],
-                ["ch", "2", "pc", str(prog2)]
-            ]
+            # Kill any existing receivemidi process BEFORE starting new sequence
+            kill_receivemidi()
 
-            all_midi_commands = initial_commands + cc  # Combine all MIDI commands
+            all_commands_for_this_patch = [
+                                              ["ch", "2", "pc", "127"],
+                                              ["ch", "1", "cc", "47", "2"],
+                                              ["ch", "1", "pc", str(prog1)],
+                                              ["ch", "2", "pc", str(prog2)]
+                                          ] + cc
 
-            # --- Specific logic for "TEST 123" ---
-            if label == "TEST 123":
-                # Hide any existing testing toast
-                if testing_toast_label and testing_toast_label.winfo_exists():
-                    testing_toast_label.destroy()
+            commands_ch1_before_receivemidi = []
+            commands_after_receivemidi_start = []
 
-                # Create the red "TESTING" toast
-                testing_toast_label = tk.Label(root, text="TESTING", bg="red", fg="white", font=big_font)
-                testing_toast_label.place(relx=0.5, rely=0.1, anchor="n")  # Slightly lower to avoid switch mode toast
-
-                current_command_index = 0
-
-                def _send_next_command():
-                    nonlocal current_command_index
-                    if current_command_index < len(all_midi_commands):
-                        command = all_midi_commands[current_command_index]
-                        send_midi([command])  # Send one command at a time
-                        current_command_index += 1
-                        if current_command_index < len(all_midi_commands):
-                            root.after(500, _send_next_command)  # Schedule next command after 0.5s
-                        else:
-                            # All commands sent, re-enable buttons and destroy toast
-                            root.after(0, lambda: [b.config(state="normal") for b in all_buttons])
-                            if testing_toast_label and testing_toast_label.winfo_exists():
-                                testing_toast_label.destroy()
-
-                _send_next_command()  # Start the sequence
+            # Only special routing when targeting MC8 (USB Direct or Hybrid)
+            if MIDI_DEVICE == USB_DIRECT_DEVICE or MIDI_DEVICE == HYBRID_DEVICE:
+                for cmd in all_commands_for_this_patch:
+                    # A command goes into commands_ch1_before_receivemidi if it's a channel 1 command 
+                    # AND we are in USB_DIRECT mode (where Quad Cortex is the target) and it's a PC command
+                    if MODE_TYPE == "USB_DIRECT" and len(cmd) > 1 and cmd[0] == "ch" and cmd[1] == "1" and cmd[2] == "pc":
+                        commands_ch1_before_receivemidi.append(cmd)
+                    else:
+                        commands_after_receivemidi_start.append(cmd)
             else:
-                # --- Normal patch execution ---
-                send_midi(all_midi_commands)
-                root.after(1000, lambda: [b.config(state="normal") for b in all_buttons])
+                # If not using the MC8, all commands can be sent immediately as there's no complex routing
+                commands_after_receivemidi_start = all_commands_for_this_patch
+
+            if label == "TEST 123" and ["ch", "1", "pc", "126"] not in commands_ch1_before_receivemidi and MODE_TYPE != "BT":
+                commands_ch1_before_receivemidi.insert(0, ["ch", "1", "pc", "126"])
+
+            # --- Function to run in a separate thread for MIDI sending and delays ---
+            def _send_patch_commands_in_thread():
+                # 1. Send commands that must go to Channel 1 (QC) BEFORE receivemidi starts (only relevant for USB_DIRECT).
+                for cmd in commands_ch1_before_receivemidi:
+                    send_midi([cmd])
+                if commands_ch1_before_receivemidi:
+                    time.sleep(0.05)
+
+                # 2. Launch receivemidi ONLY if in USB_DIRECT mode.
+                _launch_receivemidi_if_usb_direct() # This function internally checks for MODE_TYPE == "USB_DIRECT"
+
+                # 3. Add 1-second delay after potential receivemidi launches
+                time.sleep(1)
+
+                # 4. Send the remaining commands
+                if label == "TEST 123":
+                    def create_and_place_toast():
+                        nonlocal testing_toast_label
+                        if testing_toast_label and testing_toast_label.winfo_exists():
+                            testing_toast_label.destroy()
+                        testing_toast_label = tk.Label(root, text="TESTING", bg="red", fg="white", font=big_font)
+                        testing_toast_label.place(relx=0.5, rely=0.1, anchor="n")
+
+                    root.after(0, create_and_place_toast)
+
+                    for i, command in enumerate(commands_after_receivemidi_start):
+                        send_midi([command])
+                        if i < len(commands_after_receivemidi_start) - 1:
+                            time.sleep(0.25)
+
+                    root.after(0, lambda: [b.config(state="normal") for b in all_buttons])
+                    root.after(0,
+                               lambda: testing_toast_label.destroy() if testing_toast_label and testing_toast_label.winfo_exists() else None)
+
+                else:
+                    for i, command in enumerate(commands_after_receivemidi_start):
+                        send_midi([command])
+                        if i < len(commands_after_receivemidi_start) - 1:
+                            time.sleep(0.25)
+                    root.after(0, lambda: [b.config(state="normal") for b in all_buttons])
+
+            midi_send_thread = threading.Thread(target=_send_patch_commands_in_thread)
+            midi_send_thread.daemon = True
+            midi_send_thread.start()
 
         return patch_func
 
     # --- Refactored patch loading into a function ---
     def _load_and_display_patches():
-        nonlocal last_selected_button  # Ensure we can reset this
+        nonlocal last_selected_button
         # Clear existing buttons
         for widget in scrollable_frame.winfo_children():
             widget.destroy()
-        all_buttons.clear()  # Clear the list of buttons too
-        last_selected_button = None  # Reset selected button state
+        all_buttons.clear()
+        last_selected_button = None
 
         try:
-            with open(CSV_FILE, "r", encoding="utf-8") as csvfile:
-                reader = csv.reader(csvfile.read().splitlines())
-                for row in reader:
-                    if len(row) >= 3:
-                        label = row[0].strip()
-                        try:
-                            prog1 = int(row[1].strip())
-                            prog2 = int(row[2].strip())
-                            cc_commands = []
-                            cc_data = row[3:]
-                            for i in range(0, len(cc_data), 3):
-                                try:
-                                    ch = int(cc_data[i].strip())
-                                    cc = int(cc_data[i + 1].strip())
-                                    val = int(cc_data[i + 2].strip())
-                                    cc_commands.append(["ch", str(ch), "cc", str(cc), str(val)])
-                                except (ValueError, IndexError):
-                                    continue
-                            btn = tk.Button(scrollable_frame, text=label, font=big_font, padx=20, pady=10,
-                                            bg=BUTTON_BG, fg=DARK_FG, activebackground=BUTTON_HL,
-                                            activeforeground=DARK_FG,
-                                            bd=0)
-                            btn.config(
-                                command=patch_func_factory(btn, label, prog1, prog2, cc_commands))  # Modified: pass btn
-                            btn.pack(pady=5, padx=10, fill="x")
-                            all_buttons.append(btn)
-                        except ValueError:
-                            print(f"Skipping invalid row: {row}")
-            # Ensure canvas updates its scrollregion after new buttons are packed
+            try:
+                with open(CSV_FILE, "r", encoding="utf-8") as csvfile:
+                    reader = csv.reader(csvfile.read().splitlines())
+            except UnicodeDecodeError:
+                with open(CSV_FILE, "r", encoding="latin-1") as csvfile:
+                    reader = csv.reader(csvfile.read().splitlines())
+
+            for row in reader:
+                if len(row) >= 3:
+                    label = row[0].strip()
+                    try:
+                        prog1 = int(row[1].strip())
+                        prog2 = int(row[2].strip())
+                        cc_commands = []
+                        cc_data = row[3:]
+                        for i in range(0, len(cc_data), 3):
+                            try:
+                                ch = int(cc_data[i].strip())
+                                cc = int(cc_data[i + 1].strip())
+                                val = int(cc_data[i + 2].strip())
+                                cc_commands.append(["ch", str(ch), "cc", str(cc), str(val)])
+                            except (ValueError, IndexError):
+                                continue
+                        btn = tk.Button(scrollable_frame, text=label, font=big_font, padx=20, pady=10,
+                                        bg=BUTTON_BG, fg=DARK_FG, activebackground=BUTTON_HL,
+                                        activeforeground=DARK_FG,
+                                        bd=0)
+
+                        btn.config(command=patch_func_factory(btn, label, prog1, prog2, cc_commands))
+
+
+                        btn.pack(pady=5, padx=10, fill="x")
+                        all_buttons.append(btn)
+                    except ValueError:
+                        print(f"Skipping invalid row: {row}")
             canvas.config(scrollregion=canvas.bbox("all"))
 
         except FileNotFoundError:
@@ -1043,221 +1173,194 @@ def launch_main_app():
             show_toast(f"Error: CSV file '{CSV_FILE}' not found. Please ensure it exists.")
 
     # --- Initial load of patches when main app starts ---
-    # Load previously used CSV from config, if available and exists
+    config = {}
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            try:
+                config = json.load(f)
+            except json.JSONDecodeError:
+                config = {}
+
     if "csv_file_used" in config and os.path.exists(config["csv_file_used"]):
         CSV_FILE = config["csv_file_used"]
-    # Else, CSV_FILE remains at its default value (MidiList.csv) which should have been copied already
-    # by choose_setlist if it ran.
 
     _load_and_display_patches()
+    
+    # Initial launch of receivemidi if in USB_DIRECT mode, when the main app starts
+    _launch_receivemidi_if_usb_direct()
     # --- End of initial load ---
 
     down_button_frame = tk.Frame(root, bg=DARK_BG)
     down_button_frame.pack(fill="x")
 
     def scroll_down():
-        btn_down.config(relief="sunken")  # Simulate press
+        btn_down.config(relief="sunken")
         canvas.yview_scroll(1, "units")
-        root.after(150, lambda: btn_down.config(relief="raised"))  # Revert after short delay
+        root.after(150, lambda: btn_down.config(relief="raised"))
 
     btn_down = tk.Button(down_button_frame, text="↓", font=("Arial", 36, "bold"), height=1,
                          command=scroll_down, bg=BUTTON_BG, fg=DARK_FG, activebackground=BUTTON_HL,
-                         activeforeground=DARK_FG, relief="raised", bd=2)  # Added relief and bd
+                         activeforeground=DARK_FG, relief="raised", bd=2)
     btn_down.pack(fill="x")
 
-    def monitor_midi_device():
-        nonlocal MIDI_DEVICE, usb_stable_start_time, user_declined_usb_switch, SEND_DEVICE, usb_lock_active # Use nonlocal for shared variables
+    def _create_device_popup(title, message, ack_text, decline_text, is_failback):
+        nonlocal device_change_popup_instance, user_declined_usb_switch
         
-        # Load config to get the last preferred USB mode
-        config = {}
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, "r") as f:
-                try:
-                    config = json.load(f)
-                except json.JSONDecodeError:
-                    pass
+        # Prevent multiple popups
+        if device_change_popup_instance and device_change_popup_instance.winfo_exists():
+            return
+        
+        popup = tk.Toplevel(root)
+        popup.title(title)
+        popup.configure(bg=DARK_BG)
+        
+        popup_width = 800
+        popup_height = 400
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+        x_pos = (screen_width // 2) - (popup_width // 2)
+        y_pos = (screen_height // 2) - (popup_height // 2)
+        popup.geometry(f"{popup_width}x{popup_height}+{x_pos}+{y_pos}")
 
-        # Determine the last preferred USB mode and its display name
-        LAST_USB_MODE = config.get("last_usb_device", HYBRID_DEVICE) # Default to Hybrid if not found
-        if LAST_USB_MODE == HYBRID_DEVICE:
-            DISPLAY_MODE = "Hybrid USB"
-            ACK_BUTTON_COLOR = "#8f5728"
-            ACK_BUTTON_HL = "#704020"
-        else: # Assumes ALT_DEVICE (Morningstar MC8 Pro) for USB Direct
-            DISPLAY_MODE = "USB Direct"
-            ACK_BUTTON_COLOR = "#28578f"
-            ACK_BUTTON_HL = "#204070"
+        popup.grab_set()
+        popup.transient(root)
+        device_change_popup_instance = popup
+
+        tk.Label(popup, text=title.replace("!", ""), font=("Arial", 24, "bold"),
+                 bg=DARK_BG, fg=("red" if not is_failback else "#2a8f44")).pack(pady=20)
+        tk.Label(popup, text=message, font=("Arial", 14), bg=DARK_BG, fg=DARK_FG, justify="center").pack(pady=10)
+
+        switch_choice = [None] # Use a list to pass choice back from internal functions
+
+        def on_ack_clicked():
+            switch_choice[0] = True
+            if is_failback:
+                user_declined_usb_switch = False
+            popup.destroy()
+
+        def on_decline_clicked():
+            switch_choice[0] = False
+            if is_failback:
+                user_declined_usb_switch = True
+            popup.destroy()
+            
+        btn_frame_popup = tk.Frame(popup, bg=DARK_BG)
+        btn_frame_popup.pack(pady=20)
+        
+        ack_button = tk.Button(btn_frame_popup, text=ack_text, font=("Arial", 16),
+                               command=on_ack_clicked, bg=("#b02f2f" if not is_failback else "#2a8f44"), 
+                               fg="white", activebackground=("#902020" if not is_failback else "#207030"), 
+                               activeforeground="white", width=30, height=2)
+        ack_button.pack(side="left", padx=10)
+        
+        if decline_text:
+            decline_button = tk.Button(btn_frame_popup, text=decline_text, font=("Arial", 16),
+                                       command=on_decline_clicked, bg=("#28578f" if is_failback else "#444444"), 
+                                       fg="white", activebackground=BUTTON_HL, activeforeground="white",
+                                       width=30, height=2)
+            decline_button.pack(side="right", padx=10)
+
+
+        # Block execution until the popup is closed
+        root.wait_window(popup)
+        device_change_popup_instance = None # Reset instance
+        return switch_choice[0]
+
+    def monitor_midi_device(): # Removed usb_lock_checkbox from args, accessing it as global
+        nonlocal MIDI_DEVICE, MODE_TYPE, usb_stable_start_time, user_declined_usb_switch, _usb_disconnect_warning_shown
+        global mode_label, usb_lock_checkbox
 
         try:
             result = subprocess.run([SENDMIDI_PATH, "list"], capture_output=True, text=True)
             devices = result.stdout.strip().splitlines()
 
-            morningstar_present = ALT_DEVICE in devices
+            morningstar_present = USB_DIRECT_DEVICE in devices or HYBRID_DEVICE in devices
             quad_cortex_present = QUAD_CORTEX_DEVICE in devices
             
-            usb_present = morningstar_present and quad_cortex_present
-
-            # --- Dynamic Lock Button Color Update (must run on main thread) ---
-            root.after(0, lambda: update_usb_lock_button_display(usb_present))
-
-            # --- Failover Logic (from USB-based modes to BT) ---
-            if MIDI_DEVICE == ALT_DEVICE or MIDI_DEVICE == HYBRID_DEVICE:
-                # Display general monitoring toast if actively using a USB-based mode
-                if not usb_lock_active:
-                    show_toast("Monitoring Morningstar MC8 Pro and Quad Cortex MIDI Control...")
-
-                # If either of the expected USB devices is not found
-                if not usb_present:
-                    if usb_lock_active:
-                        # **Lock is active, prevent failover prompt, but continue monitoring**
-                        show_toast("USB Disconnect detected, but Failover is LOCKED 🔒", bg="#b02f2f", duration=5000)
+            # Simplified check for USB availability: both critical devices must be visible
+            usb_devices_present = morningstar_present and quad_cortex_present
+            
+            # --- STATUS LABEL AND CHECKBOX COLORING LOGIC ---
+            if mode_label and mode_label.winfo_exists() and usb_lock_checkbox and usb_lock_checkbox.winfo_exists():
+                
+                # REVISED: Only use MODE_TYPE for status text
+                if MODE_TYPE == "USB_DIRECT" or MODE_TYPE == "HYBRID":
+                    if not usb_devices_present:
+                        # USB Mode, Disconnected: RED status and checkbox
+                        mode_label.config(text=f"Current Mode: {MODE_TYPE} (USB DISCONNECTED!)", fg="red")
+                        usb_lock_checkbox.config(bg=USB_UNAVAILABLE_COLOR, activebackground=USB_UNAVAILABLE_ACTIVE_COLOR)
                     else:
-                        # Reset decline flag as USB is now disconnected
-                        user_declined_usb_switch = False
+                        # USB Mode, Connected: GREEN status and checkbox
+                        mode_label.config(text=f"Current Mode: {MODE_TYPE} (USB CONNECTED)", fg=USB_AVAILABLE_COLOR) 
+                        usb_lock_checkbox.config(bg=USB_AVAILABLE_COLOR, activebackground=USB_AVAILABLE_ACTIVE_COLOR) 
+                
+                elif MODE_TYPE == "BT":
+                    if usb_devices_present:
+                        # BT Mode, USB Available: GREEN status and checkbox
+                        mode_label.config(text=f"Current Mode: {MODE_TYPE} (USB AVAILABLE)", fg=USB_AVAILABLE_COLOR)
+                        usb_lock_checkbox.config(bg=USB_AVAILABLE_COLOR, activebackground=USB_AVAILABLE_ACTIVE_COLOR)
+                    else:
+                        # BT Mode, USB Unavailable: Default status and checkbox
+                        mode_label.config(text=f"Current Mode: {MODE_TYPE}", fg=DARK_FG)
+                        usb_lock_checkbox.config(bg=DARK_BG, activebackground=DARK_BG)
+            
+            # --- END STATUS LABEL AND CHECKBOX COLORING LOGIC ---
+
+            # --- Failover Logic (from USB Direct/Hybrid to BT) ---
+            if MODE_TYPE == "USB_DIRECT" or MODE_TYPE == "HYBRID":
+                if not usb_devices_present:
+                    
+                    if usb_lock_var.get():
+                        # LOCK IS ACTIVE: Prevent forced switch to BT.
+                        # LOGIC ADDED: Only show toast if the warning hasn't been shown yet
+                        if not _usb_disconnect_warning_shown:
+                            show_toast(f"USB disconnected! Switch to BT prevented by lock.", bg="red", duration=5000)
+                            _usb_disconnect_warning_shown = True # Set flag after showing
+                        # No 'return' here, so monitoring will reschedule at the end.
                         
-                        # --- Failover Prompt and Re-launch Logic ---
-                        popup = tk.Toplevel(root)
-                        popup.title("USB Device Disconnected!")
-                        popup.configure(bg=DARK_BG)
+                    else:
+                        # LOCK IS INACTIVE: Proceed with switch to BT
+                        user_declined_usb_switch = False
+                        _usb_disconnect_warning_shown = False # RESET FLAG before switching
+                        kill_receivemidi()
 
-                        # Calculate position to center the popup over the main screen
-                        popup_width = 700
-                        popup_height = 400
-                        screen_width = root.winfo_screenwidth()
-                        screen_height = root.winfo_screenheight()
-                        x_pos = (screen_width // 2) - (popup_width // 2)
-                        y_pos = (screen_height // 2) - (popup_height // 2)
-                        popup.geometry(f"{popup_width}x{popup_height}+{x_pos}+{y_pos}")
-
-                        # Make it modal and transient
-                        popup.grab_set()
-                        popup.transient(root)
-
-                        tk.Label(popup, text="USB Device failed!", font=("Arial", 24, "bold"),
-                                 bg=DARK_BG, fg="red").pack(pady=20)
-                        tk.Label(popup,
-                                 text="Check MIDIberry settings. Defaulting to BLUETOOTH connection\n(power on rack WIDI jack first).",
-                                 font=("Arial", 14), bg=DARK_BG, fg=DARK_FG).pack(pady=10)
-
-                        def on_ok_clicked():
-                            popup.destroy()
-
-                        ok_button = tk.Button(popup, text="OK", font=("Arial", 16),
-                                              command=on_ok_clicked, bg=BUTTON_BG, fg=DARK_FG,
-                                              activebackground=BUTTON_HL, activeforeground=DARK_FG,
-                                              width=10, height=2)
-                        ok_button.pack(pady=20)
-
-                        # Block execution until the popup is closed
-                        root.wait_window(popup)
+                        message = "USB Device failed! Check MIDIberry settings. Defaulting to BLUETOOTH connection\n(power on rack WIDI jack first)."
+                        _create_device_popup("USB Device Disconnected!", message, "OK", None, False)
 
                         # --- After popup is dismissed, proceed with re-launch ---
-                        # Preserve lock state for new instance
-                        save_config(device=DEFAULT_DEVICE, relaunch_on_monitor_fail=True, usb_lock_active=usb_lock_active)
-                        new_env = os.environ.copy()
-                        new_env["MIDI_DEVICE"] = DEFAULT_DEVICE
+                        _set_device_mode("BT", DEFAULT_DEVICE, should_relaunch=True)
+                        return # Exit function as a new instance is launched
 
-                        subprocess.Popen([sys.executable, SCRIPT_PATH], env=new_env)
-                        root.destroy()  # Destroy current GUI instance
-                        return  # Exit the monitoring function as we are re-launching
+                else:
+                    # USB devices ARE present while in USB_DIRECT/HYBRID mode
+                    _usb_disconnect_warning_shown = False # RESET FLAG when USB is reconnected
 
-            # --- Failback Logic (from BT to original USB-based mode) ---
-            elif MIDI_DEVICE == DEFAULT_DEVICE:
-                # If both expected USB devices are now present in the sendmidi list
-                if usb_present:
+            # --- Failback Logic (from BT to USB Direct) ---
+            elif MODE_TYPE == "BT":
+                if usb_devices_present:
                     if usb_stable_start_time is None:
                         usb_stable_start_time = time.time()
                         show_toast("USB devices detected. Checking for stability...", duration=3000)
                     elif (time.time() - usb_stable_start_time) >= 10:
-                        # USB stable for 10 seconds
-                        
-                        usb_stable_start_time = None  # Reset for next cycle
-                        
-                        if usb_lock_active:
-                             # **Lock is active, prevent failback prompt, but continue monitoring**
-                            show_toast(f"USB devices are stable, but Failback is LOCKED 🔒. Click USB Lock to switch.", bg="#b02f2f", duration=5000)
-                        elif user_declined_usb_switch:
-                            # User previously declined, so just show a toast, don't show the popup
-                            show_toast("Morningstar MC8 Pro and Quad Cortex MIDI control available...", duration=3000)
+                        usb_stable_start_time = None
+
+                        if usb_lock_var.get() or user_declined_usb_switch:
+                            show_toast("USB devices available, but switch declined/locked.")
                         else:
-                            # Create the Acknowledge popup
-                            popup = tk.Toplevel(root)
-                            popup.title("USB Devices Reconnected!")
-                            popup.configure(bg=DARK_BG)
+                            message = "Both Morningstar MC8 Pro and Quad Cortex MIDI Control\nhave reconnected via USB. Do you want to switch back to USB Direct mode?"
+                            choice = _create_device_popup("USB Devices Reconnected!", message, 
+                                                           "Acknowledge & Switch to USB Direct", "No, stay on Bluetooth", True)
 
-                            # Calculate position to center the popup over the main screen
-                            popup_width = 700
-                            popup_height = 400
-                            screen_width = root.winfo_screenwidth()
-                            screen_height = root.winfo_screenheight()
-                            x_pos = (screen_width // 2) - (popup_width // 2)
-                            y_pos = (screen_height // 2) - (popup_height // 2)
-                            popup.geometry(f"{popup_width}x{popup_height}+{x_pos}+{y_pos}")
+                            if choice == True:
+                                # Switch to USB Direct, which uses receivemidi
+                                _set_device_mode("USB_DIRECT", USB_DIRECT_DEVICE, should_relaunch=True)
+                                return
+                            # If choice is False, user_declined_usb_switch is set to True inside the popup logic
 
-                            popup.grab_set()
-                            popup.transient(root)
-
-                            tk.Label(popup,
-                                     text="Both Morningstar MC8 Pro and Quad Cortex MIDI Control\nhave reconnected via USB.",
-                                     font=("Arial", 18, "bold"),
-                                     bg=DARK_BG, fg="#2a8f44", justify="center").pack(pady=20)
-                            
-                            # Use the determined mode from config
-                            tk.Label(popup, text=f"Do you want to switch back to {DISPLAY_MODE} mode?",
-                                     font=("Arial", 14), bg=DARK_BG, fg=DARK_FG).pack(pady=10)
-
-                            switch_to_usb_clicked = False  # Flag to track user choice
-
-                            def on_acknowledge_clicked():
-                                nonlocal switch_to_usb_clicked, user_declined_usb_switch
-                                switch_to_usb_clicked = True
-                                user_declined_usb_switch = False  # Reset if they acknowledge and switch
-                                popup.destroy()
-
-                            def on_decline_clicked():
-                                nonlocal switch_to_usb_clicked, user_declined_usb_switch
-                                switch_to_usb_clicked = False
-                                user_declined_usb_switch = True  # Set the flag if user declines
-                                popup.destroy()
-
-                            btn_frame_popup = tk.Frame(popup, bg=DARK_BG)
-                            btn_frame_popup.pack(pady=20)
-
-                            ack_button = tk.Button(btn_frame_popup, text=f"Acknowledge & Switch to {DISPLAY_MODE}",
-                                                   font=("Arial", 16),
-                                                   command=on_acknowledge_clicked, bg=ACK_BUTTON_COLOR, fg="white",
-                                                   activebackground=ACK_BUTTON_HL, activeforeground="white",
-                                                   width=30, height=2)
-                            ack_button.pack(side="left", padx=10)
-
-                            decline_button = tk.Button(btn_frame_popup, text="No, stay on Bluetooth",
-                                                       font=("Arial", 16),
-                                                       command=on_decline_clicked, bg="#b02f2f", fg="white",
-                                                       activebackground="#902020", activeforeground="white",
-                                                       width=30, height=2)
-                            decline_button.pack(side="right", padx=10)
-
-                            # Block execution until the popup is closed
-                            root.wait_window(popup)
-
-                            # Check user's choice after popup is closed
-                            if switch_to_usb_clicked:
-                                # Set relaunch_on_monitor_fail to True so the new instance skips initial prompts.
-                                # Use LAST_USB_MODE for the device setting. Preserve lock state.
-                                save_config(device=LAST_USB_MODE, relaunch_on_monitor_fail=True, usb_lock_active=usb_lock_active)
-                                new_env = os.environ.copy()
-                                new_env["MIDI_DEVICE"] = LAST_USB_MODE  # Set to the last USB device
-                                subprocess.Popen([sys.executable, SCRIPT_PATH], env=new_env)
-                                root.destroy()  # Destroy current GUI instance
-                                return  # Exit the monitoring function if popup was shown and user clicked acknowledge
-                            else:
-                                # User declined, stay on current device, do not re-launch
-                                show_toast("Staying on Bluetooth mode.")
-                                # The monitor function will reschedule itself at the end if not re-launched
                 else:
-                    # If devices are not present or stability is lost, reset the timer and decline flag
+                    # If devices are not present, reset the timer and decline flag
                     usb_stable_start_time = None
-                    user_declined_usb_switch = False  # Reset if USB devices are no longer present
+                    user_declined_usb_switch = False
 
         except Exception as e:
             show_toast(f"Device check failed: {e}")
@@ -1265,7 +1368,7 @@ def launch_main_app():
         # Always re-schedule the monitor function unless a re-launch occurred
         root.after(5000, monitor_midi_device)
 
-    monitor_midi_device()  # Start the monitoring loop
+    monitor_midi_device()
     root.mainloop()
 
 
