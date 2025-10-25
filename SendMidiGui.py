@@ -16,7 +16,12 @@ DEFAULT_DEVICE = "loopMIDI Port"
 ALT_DEVICE = "Morningstar MC8 Pro"
 QUAD_CORTEX_DEVICE = "Quad Cortex MIDI Control"  # Added new device for monitoring
 HYBRID_DEVICE = "Morningstar MC8 Pro (Hybrid)" # New constant for the Hybrid mode logic
-SENDMIDI_PATH = "C:\\Tools\\sendmidi\\sendmidi.exe"
+
+# --- MODIFIED: Locate sendmidi.exe relative to the script's directory ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # New constant for clarity
+SENDMIDI_PATH = os.path.join(SCRIPT_DIR, "sendmidi", "sendmidi.exe") 
+# --- END MODIFIED SECTION ---
+
 ICON_FILE = "sendmidi.ico"
 SCRIPT_PATH = os.path.abspath(__file__)
 CSV_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv")  # This will be updated dynamically
