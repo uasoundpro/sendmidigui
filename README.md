@@ -1,6 +1,6 @@
 # 🚀 MIDI Patch Sender GUI
 
-REVISION: 1.1
+REVISION: 1.1.x
 DATE:     2025-10-25
 
 This is a dynamic Python-based graphical user interface (GUI) designed for musicians to quickly send MIDI Program Change (PC) and Control Change (CC) messages to connected MIDI devices, with a focus on seamless switching between **Bluetooth** (WIDI/loopMIDI) and **USB** (Morningstar MC8/Quad Cortex) connections.
