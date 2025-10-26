@@ -19,10 +19,11 @@ USB_DIRECT_DEVICE = "Morningstar MC8 Pro"
 # HYBRID_DEVICE is the name used internally by sendmidi for the MC8 (Hybrid mode)
 HYBRID_DEVICE = "Morningstar MC8 Pro" 
 QUAD_CORTEX_DEVICE = "Quad Cortex MIDI Control"
-SENDMIDI_PATH = "C:\\Tools\\sendmidi\\sendmidi.exe"
-RECEIVEMIDI_PATH = "C:\\Tools\\receivemidi\\receivemidi.exe"
 ICON_FILE = "sendmidi.ico"
 SCRIPT_PATH = os.path.abspath(__file__)
+# SCRIPT_PATH is already defined above this section. It resolves the script's location.
+SENDMIDI_PATH = os.path.join(os.path.dirname(SCRIPT_PATH), "sendmidi", "sendmidi.exe")
+RECEIVEMIDI_PATH = os.path.join(os.path.dirname(SCRIPT_PATH), "receivemidi", "receivemidi.exe")
 CSV_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv")
 CONFIG_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "config.json")
 SETLIST_FOLDER = os.path.join(os.path.dirname(SCRIPT_PATH), "Setlist")
