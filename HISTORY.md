@@ -22,7 +22,6 @@ The flexibility and persistence of device modes were significantly improved.
 | Feature | Change Description | Impact |
 | :--- | :--- | :--- |
 | **Hybrid USB Mode** | Introduced a new connection constant (`HYBRID_DEVICE`) and mode option during initial launch and within the new mode selection popup. | Offers a third connection option that sends **all MIDI commands to the Morningstar MC8 Pro** device, simplifying routing when specialized Quad Cortex Channel 1 routing is not desired. |
-| **Persistent Last USB Mode** | Added logic to save the last selected USB-based mode (`last_usb_device`) in `config.json`. | Ensures that when the system fails back from Bluetooth to USB, it intelligently switches to the user's last preferred USB mode (either **USB Direct** or **Hybrid USB**). |
 | **Manual Mode Switching** | Added a **"Switch Mode"** button and popup to the main GUI. | Allows the user to manually switch between Bluetooth, USB Direct, and Hybrid USB modes **without restarting the application**. |
 
 ## 💡 III. Quality of Life and Stability
