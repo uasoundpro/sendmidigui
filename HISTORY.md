@@ -1,4 +1,4 @@
-# S_Revisions_Changes
+# Revisions & Changes
 
 This document outlines the key functional and structural changes made to the `SendMidiGui.py` script, primarily focusing on the evolution of the MIDI connection management and control features.
 
