@@ -58,12 +58,12 @@ _receivemidi_process = None
 _receivemidi_stdout_thread = None
 _receivemidi_stderr_thread = None
 
-# --- NEW GLOBAL VARIABLE FOR REROUTING IN HYBRID MODE ---
+# --- GLOBAL VARIABLE FOR HYBRID MODE REROUTING ---
 # This will be updated by monitor_midi_device
 _qc_midi_target_device = QUAD_CORTEX_DEVICE
 
 # =================== GLOBAL CONFIG MANAGEMENT =====================
-def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, current_setlist_display_name=None, usb_lock_active=None):
+def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, current_setlist_display_name=None, usb_lock_active=None, debug_enabled=None):
     """Saves application configuration to config.json."""
     config = {}
     if os.path.exists(CONFIG_FILE):
@@ -82,6 +82,8 @@ def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, 
         config["current_setlist_display_name"] = current_setlist_display_name
     if usb_lock_active is not None:
         config["usb_lock_active"] = usb_lock_active
+    if debug_enabled is not None:
+        config["debug_enabled"] = debug_enabled
     config["last_run"] = time.time()  # Always update last_run
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
@@ -347,7 +349,7 @@ def choose_device_and_launch():
         else: # Should not happen, fallback
             selected = DEFAULT_DEVICE
         
-        save_config(device=selected)  # Use the unified save_config
+        # Debug state is already saved by toggle_debug_logging command
         os.environ["MIDI_DEVICE"] = selected
         os.environ["MODE_TYPE"] = mode # Pass the mode type
         launch_main_app()
@@ -356,7 +358,7 @@ def choose_device_and_launch():
         # Only run timeout_default if the chooser window still exists
         if chooser.winfo_exists():
             chooser.destroy()
-            save_config(device=DEFAULT_DEVICE)  # Use the unified save_config
+            # Debug state is already saved by toggle_debug_logging command
             os.environ["MIDI_DEVICE"] = DEFAULT_DEVICE
             os.environ["MODE_TYPE"] = "BT"
             launch_main_app()
@@ -455,8 +457,8 @@ def choose_device_and_launch():
         # If the user selects a custom device, we assume it's like Hybrid (no receivemidi)
         if mode_type == "UNKNOWN":
             mode_type = "CUSTOM_NO_RX"
-
-        save_config(device=actual_device_to_set)
+        
+        # Debug state is already saved by toggle_debug_logging command
         os.environ["MIDI_DEVICE"] = actual_device_to_set
         os.environ["MODE_TYPE"] = mode_type
         launch_main_app()
@@ -464,7 +466,7 @@ def choose_device_and_launch():
     chooser = tk.Tk()
     chooser.title("Select MIDI Device")
     chooser.configure(bg=DARK_BG)
-    chooser.geometry("900x550+{}+{}".format( # Adjusted height for vertical stacking
+    chooser.geometry("900x600+{}+{}".format( # Adjusted height for vertical stacking
         chooser.winfo_screenwidth() // 2 - 450,
         chooser.winfo_screenheight() // 2 - 175
     ))
@@ -486,6 +488,29 @@ def choose_device_and_launch():
                         command=lambda: select_device("HYBRID"), bg="#28578f", fg="white")
     btn_hybrid.grid(row=2, column=0, pady=5, padx=5)
     # --- END Vertical Stacking ---
+    
+    # --- NEW DEBUG TOGGLE LOGIC ---
+    initial_debug_state = config.get("debug_enabled", False)
+    debug_var = tk.BooleanVar(value=initial_debug_state)
+    
+    def toggle_debug_logging():
+        # This saves the state immediately when the checkbox is clicked
+        save_config(debug_enabled=debug_var.get())
+        
+    debug_checkbox = tk.Checkbutton(
+        chooser,
+        text="Enable MIDI Debug Logging (Prints commands to console)",
+        variable=debug_var,
+        command=toggle_debug_logging,
+        bg=DARK_BG,
+        fg=DARK_FG,
+        selectcolor=DARK_BG, # Ensures background is dark even when checked
+        activebackground=DARK_BG,
+        activeforeground=DARK_FG,
+        font=narrow_font_plain
+    )
+    debug_checkbox.pack(pady=(20, 10))
+    # --- END NEW DEBUG TOGGLE LOGIC ---
 
     btn_list = tk.Button(chooser, text="List MIDI Devices", font=narrow_font_plain, command=list_devices,
                          bg="#444444", fg=DARK_FG, activebackground=BUTTON_HL, activeforeground=DARK_FG, bd=0, padx=6,
@@ -495,14 +520,14 @@ def choose_device_and_launch():
     timer_label = tk.Label(chooser, text="", bg=DARK_BG, fg=DARK_FG, font=narrow_font_plain)
     timer_label.pack(pady=5)
 
-    timer_count = [10]
+    timer_count = [15]
 
     def countdown():
         # Only run countdown if the chooser window still exists
         if chooser.winfo_exists() and timer_count[0] > 0:
             timer_label.config(text=f"Defaulting to BT in {timer_count[0]}s")
             timer_count[0] -= 1
-            chooser.after(1000, countdown)
+            chooser.after(1500, countdown)
         elif chooser.winfo_exists() and timer_count[0] == 0:
             timeout_default()
 
@@ -555,6 +580,11 @@ def launch_main_app():
     # If this launch was due to monitor failure, reset the flag in config
     if config.get("relaunch_on_monitor_fail"):
         save_config(relaunch_on_monitor_fail=False)
+        
+    # --- Set environment variable for debug state ---
+    initial_debug_state = config.get("debug_enabled", False) 
+    os.environ["MIDI_DEBUG_ENABLED"] = str(initial_debug_state) 
+    # --- END ---
 
     current_setlist_name_for_display = config.get("current_setlist_display_name", "Unknown Setlist")
 
@@ -612,9 +642,10 @@ def launch_main_app():
             full_cmd = [SENDMIDI_PATH, "dev", target_device]
             # Ensure each element in the command is a string
             full_cmd.extend([str(arg) for arg in command])
-
-            # 💡 DEBUGGING LINE ADDED HERE:
-            #print(f"[MIDI DEBUG] Executing: {' '.join(full_cmd)}")
+            
+            # 💡 DEBUGGING LINE: Conditional based on environment variable set at launch
+            if os.environ.get("MIDI_DEBUG_ENABLED") == "True":
+                print(f"[MIDI DEBUG] Executing: {' '.join(full_cmd)}")
             
             subprocess.run(full_cmd)
 
@@ -806,6 +837,8 @@ def launch_main_app():
         if should_relaunch:
             save_config(relaunch_on_monitor_fail=True)
             new_env = os.environ.copy()
+            # Preserve the MIDI_DEBUG_ENABLED state in the new environment
+            new_env["MIDI_DEBUG_ENABLED"] = os.environ.get("MIDI_DEBUG_ENABLED", "False") 
             subprocess.Popen([sys.executable, SCRIPT_PATH], env=new_env)
             root.destroy()
             return
@@ -1318,11 +1351,11 @@ def launch_main_app():
                 if MODE_TYPE == "USB_DIRECT" or MODE_TYPE == "HYBRID":
                     if not usb_devices_present:
                         # USB Mode, Disconnected: RED status and checkbox
-                        mode_label.config(text=f"{mode_label_text} (USB DISCONNECTED!)", fg="red")
+                        mode_label.config(text=f"{mode_label_text}", fg="red")
                         usb_lock_checkbox.config(bg=USB_UNAVAILABLE_COLOR, activebackground=USB_UNAVAILABLE_ACTIVE_COLOR)
                     else:
                         # USB Mode, Connected: GREEN status and checkbox
-                        mode_label.config(text=f"{mode_label_text} (USB CONNECTED)", fg=USB_AVAILABLE_COLOR) 
+                        mode_label.config(text=f"{mode_label_text}", fg=USB_AVAILABLE_COLOR) 
                         usb_lock_checkbox.config(bg=USB_AVAILABLE_COLOR, activebackground=USB_AVAILABLE_ACTIVE_COLOR) 
                 
                 elif MODE_TYPE == "BT":
