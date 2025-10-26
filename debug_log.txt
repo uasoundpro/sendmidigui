@@ -1,0 +1,82 @@
+[2025-10-26 16:54:55] [main.py] --- SCRIPT LAUNCHED ---
+[2025-10-26 16:54:55] [main.py] Python Executable: C:\Users\UASou\AppData\Local\Programs\Python\Python314\python.exe
+[2025-10-26 16:54:55] [main.py] Python Version: 3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
+[2025-10-26 16:54:55] [main.py] Script Path: C:\Users\UASou\OneDrive\Desktop\SendMidiGui-DEV\main.py
+[2025-10-26 16:54:55] [main.py] NEW: Working directory has been FORCED to: C:\Users\UASou\OneDrive\Desktop\SendMidiGui-DEV
+[2025-10-26 16:54:55] [main.py] Attempting to import 'tkinter' as 'tk'...
+[2025-10-26 16:54:55] [main.py] SUCCESS: Imported 'tkinter'.
+[2025-10-26 16:54:55] [main.py] Attempting to import 'config'...
+[2025-10-26 16:54:55] [main.py] SUCCESS: Imported 'config'.
+[2025-10-26 16:54:55] [main.py] Attempting to import 'gui.app'...
+[2025-10-26 16:54:55] [main.py] SUCCESS: Imported 'gui.app'.
+[2025-10-26 16:54:55] [main.py] Attempting to import 'gui.popups'...
+[2025-10-26 16:54:55] [main.py] SUCCESS: Imported 'gui.popups'.
+[2025-10-26 16:54:55] [main.py] All initial imports seem successful.
+[2025-10-26 16:54:55] [main.py] Script is being run as __main__.
+[2025-10-26 16:54:55] [main.py] Calling main()...
+[2025-10-26 16:54:55] [main.py] --- main() FUNCTION STARTED ---
+[2025-10-26 16:54:55] [main.py] main(): 1. Loading config...
+[2025-10-26 16:54:55] [main.py] main(): Config loaded. 'relaunch_on_monitor_fail' is: False
+[2025-10-26 16:54:55] [main.py] main(): 2. Setting debug state in environment...
+[2025-10-26 16:54:55] [main.py] main(): MIDI_DEBUG_ENABLED set to: True
+[2025-10-26 16:54:55] [main.py] main(): 3. Creating main tk.Tk() root window...
+[2025-10-26 16:54:55] [main.py] main(): Root window created.
+[2025-10-26 16:54:55] [main.py] main(): Hiding root window for popups...
+[2025-10-26 16:54:55] [main.py] main(): Root window hidden.
+[2025-10-26 16:54:55] [main.py] main(): 4. Calling popups.show_setlist_chooser()... (Script will pause here)
+[2025-10-26 16:54:55] [gui.popups] show_setlist_chooser() called.
+[2025-10-26 16:54:55] [gui.popups] Config loaded.
+[2025-10-26 16:54:55] [gui.popups] Not a relaunch. Proceeding to create popup.
+[2025-10-26 16:54:55] [gui.popups] Creating Toplevel popup window...
+[2025-10-26 16:54:55] [gui.popups] Toplevel popup created.
+[2025-10-26 16:54:55] [gui.popups] Calculating geometry...
+[2025-10-26 16:54:55] [gui.popups] Screen dims: 1707x960. Window pos: +553+330
+[2025-10-26 16:54:55] [gui.popups] Popup geometry set.
+[2025-10-26 16:54:55] [gui.popups] Skipping grab_set() and transient() to prevent crash.
+[2025-10-26 16:54:55] [gui.popups] Creating widgets for setlist chooser...
+[2025-10-26 16:54:55] [gui.popups] Widgets created.
+[2025-10-26 16:54:55] [gui.popups] Calling root.wait_window(popup)... (Window should be visible NOW)
+[2025-10-26 16:54:56] [gui.popups] choose_setlist_file() called. Destroying this popup.
+[2025-10-26 16:54:56] [gui.popups] Calling _show_setlist_file_picker().
+[2025-10-26 16:54:56] [gui.popups] _show_setlist_file_picker() called.
+[2025-10-26 16:54:56] [gui.popups] Calculating geometry for setlist picker...
+[2025-10-26 16:54:56] [gui.popups] Screen dims: 1707x960. Window pos: +593+220
+[2025-10-26 16:54:56] [gui.popups] Skipping grab_set() and transient() to prevent crash.
+[2025-10-26 16:54:56] [gui.popups] Setlist picker popup created and configured.
+[2025-10-26 16:54:56] [gui.popups] Creating canvas and scrollbar for setlist picker...
+[2025-10-26 16:54:56] [gui.popups] Canvas and scrollbar created.
+[2025-10-26 16:54:56] [gui.popups] Reading setlist files...
+[2025-10-26 16:54:56] [gui.popups] Found 10 setlist files. Creating buttons...
+[2025-10-26 16:54:56] [gui.popups] Setlist buttons created.
+[2025-10-26 16:54:56] [gui.popups] Calling root.wait_window(popup) for setlist picker... (Window should be visible NOW)
+[2025-10-26 16:54:57] [gui.popups] process_selected_setlist() called with: C:\Users\UASou\OneDrive\Desktop\SendMidiGui-DEV\Setlist\STFatHeritageHill.txt
+[2025-10-26 16:54:57] [gui.popups] Creating ordered CSV at: C:\Users\UASou\OneDrive\Desktop\SendMidiGui-DEV\MidiList_Set.csv
+[2025-10-26 16:54:57] [gui.popups] CSV created.
+[2025-10-26 16:54:57] [gui.popups] Display name set to: STF @ Heritage Hill | Wednesday, October 22, 2025
+[2025-10-26 16:54:57] [gui.popups] Config saved. Destroying popup.
+[2025-10-26 16:54:57] [gui.popups] root.wait_window(popup) for setlist picker has finished.
+[2025-10-26 16:54:57] [gui.popups] root.wait_window(popup) has finished.
+[2025-10-26 16:54:57] [main.py] main(): popups.show_setlist_chooser() FINISHED.
+[2025-10-26 16:54:57] [main.py] main(): 4b. Calling popups.show_device_chooser()... (Script will pause here)
+[2025-10-26 16:54:57] [gui.popups] show_device_chooser() called.
+[2025-10-26 16:54:57] [gui.popups] Config loaded.
+[2025-10-26 16:54:57] [gui.popups] Not a relaunch. Proceeding to create device chooser.
+[2025-10-26 16:54:57] [gui.popups] Calculating geometry for device chooser...
+[2025-10-26 16:54:57] [gui.popups] Screen dims: 1707x960. Window pos: +403+180
+[2025-10-26 16:54:57] [gui.popups] Skipping grab_set() and transient() to prevent crash.
+[2025-10-26 16:54:57] [gui.popups] Device chooser popup created and configured.
+[2025-10-26 16:54:57] [gui.popups] Creating main widgets for device chooser...
+[2025-10-26 16:54:57] [gui.popups] Starting countdown timer...
+[2025-10-26 16:54:57] [gui.popups] Calling root.wait_window(popup) for device chooser... (Window should be visible NOW)
+[2025-10-26 16:55:01] [gui.popups] Debug logging toggled to: False
+[2025-10-26 16:55:02] [gui.popups] select_device() called with mode: USB_DIRECT
+[2025-10-26 16:55:02] [gui.popups] Device saved to config. Destroying popup.
+[2025-10-26 16:55:02] [gui.popups] root.wait_window(popup) for device chooser has finished.
+[2025-10-26 16:55:02] [main.py] main(): popups.show_device_chooser() FINISHED.
+[2025-10-26 16:55:02] [main.py] main(): 5. De-iconifying (showing) root window...
+[2025-10-26 16:55:02] [main.py] main(): Root window is now visible.
+[2025-10-26 16:55:02] [main.py] main(): 6. Initializing gui.app.MidiSenderApp()...
+[2025-10-26 16:55:02] [main.py] main(): MidiSenderApp initialized successfully.
+[2025-10-26 16:55:02] [main.py] main(): 7. Starting root.mainloop()... (Application is now running)
+[2025-10-26 16:56:36] [main.py] main(): root.mainloop() has finished. (Application was closed)
+[2025-10-26 16:56:36] [main.py] --- SCRIPT FINISHED NORMALLY ---
