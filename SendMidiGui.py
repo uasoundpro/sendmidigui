@@ -58,6 +58,10 @@ _receivemidi_process = None
 _receivemidi_stdout_thread = None
 _receivemidi_stderr_thread = None
 
+# --- NEW GLOBAL VARIABLE FOR REROUTING IN HYBRID MODE ---
+# This will be updated by monitor_midi_device
+_qc_midi_target_device = QUAD_CORTEX_DEVICE
+
 # =================== GLOBAL CONFIG MANAGEMENT =====================
 def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, current_setlist_display_name=None, usb_lock_active=None):
     """Saves application configuration to config.json."""
@@ -564,7 +568,7 @@ def launch_main_app():
     testing_toast_label = None
     usb_stable_start_time = None
     user_declined_usb_switch = False
-    _usb_disconnect_warning_shown = False # <-- ADDED: State for intermittent USB disconnect toast
+    _usb_disconnect_warning_shown = False # State for intermittent USB disconnect toast
 
     # Instance variables for managing single popup windows from the main GUI
     setlist_popup_window_instance = None
@@ -584,6 +588,9 @@ def launch_main_app():
         root.after(duration, toast.destroy)
 
     def send_midi(command_list):
+        # Access the global routing variable
+        global _qc_midi_target_device
+        
         for command in command_list:
             # Determine the target device for the current command
             target_device = MIDI_DEVICE  # Default target is the globally selected MIDI_DEVICE
@@ -597,14 +604,18 @@ def launch_main_app():
                         # Channel 2 messages should always go to the MC8 itself (which is MIDI_DEVICE)
                         target_device = MIDI_DEVICE
                     elif channel_str == "1":
-                        # Channel 1 messages should go to the Quad Cortex
-                        target_device = QUAD_CORTEX_DEVICE
+                        # Channel 1 messages should go to the determined QC target device
+                        target_device = _qc_midi_target_device # Use the global target
                 # If it's not a "ch" command, it defaults to the main MIDI_DEVICE (MC8)
 
             # Construct and run the subprocess command with the determined target_device
             full_cmd = [SENDMIDI_PATH, "dev", target_device]
             # Ensure each element in the command is a string
             full_cmd.extend([str(arg) for arg in command])
+
+            # 💡 DEBUGGING LINE ADDED HERE:
+            #print(f"[MIDI DEBUG] Executing: {' '.join(full_cmd)}")
+            
             subprocess.run(full_cmd)
 
     # Helper function to launch receivemidi
@@ -767,7 +778,7 @@ def launch_main_app():
 
     def _set_device_mode(new_mode_type, new_device, should_relaunch=False):
         nonlocal MIDI_DEVICE, MODE_TYPE, user_declined_usb_switch, _usb_disconnect_warning_shown # Added: _usb_disconnect_warning_shown
-        global mode_label # Access global mode_label
+        global mode_label, _qc_midi_target_device # Access global mode_label and _qc_midi_target_device
 
         # 1. Update globals and config
         kill_receivemidi()
@@ -778,6 +789,9 @@ def launch_main_app():
         os.environ["MODE_TYPE"] = new_mode_type
         MIDI_DEVICE = new_device
         MODE_TYPE = new_mode_type
+        
+        # Reset the QC target device on mode switch. Monitor will update it shortly.
+        _qc_midi_target_device = QUAD_CORTEX_DEVICE
         
         # Update the status label on the main GUI (REMOVED MIDI_DEVICE tag)
         if mode_label and mode_label.winfo_exists():
@@ -1268,7 +1282,7 @@ def launch_main_app():
 
     def monitor_midi_device(): # Removed usb_lock_checkbox from args, accessing it as global
         nonlocal MIDI_DEVICE, MODE_TYPE, usb_stable_start_time, user_declined_usb_switch, _usb_disconnect_warning_shown
-        global mode_label, usb_lock_checkbox
+        global mode_label, usb_lock_checkbox, _qc_midi_target_device # Access global routing variable
 
         try:
             result = subprocess.run([SENDMIDI_PATH, "list"], capture_output=True, text=True)
@@ -1277,31 +1291,48 @@ def launch_main_app():
             morningstar_present = USB_DIRECT_DEVICE in devices or HYBRID_DEVICE in devices
             quad_cortex_present = QUAD_CORTEX_DEVICE in devices
             
-            # Simplified check for USB availability: both critical devices must be visible
+            # Simplified check for USB availability: both critical devices must be visible for a "Full USB" state
             usb_devices_present = morningstar_present and quad_cortex_present
+            
+            # --- HYBRID MODE REROUTING LOGIC ---
+            if MODE_TYPE == "HYBRID":
+                if not quad_cortex_present:
+                    # QC is missing, REROUTE QC messages (Ch 1) to MC8 (Hybrid Device)
+                    _qc_midi_target_device = HYBRID_DEVICE 
+                    # Use a slightly modified text for the status label
+                    mode_label_text = f"Current Mode: {MODE_TYPE} (QC REROUTED to MC8)"
+                else:
+                    # QC is present, send QC messages (Ch 1) directly to QC device
+                    _qc_midi_target_device = QUAD_CORTEX_DEVICE
+                    mode_label_text = f"Current Mode: {MODE_TYPE} (QC DIRECT)"
+            else:
+                # All other modes, QC target is direct
+                _qc_midi_target_device = QUAD_CORTEX_DEVICE
+                mode_label_text = f"Current Mode: {MODE_TYPE}"
+            # --- END HYBRID MODE REROUTING LOGIC ---
             
             # --- STATUS LABEL AND CHECKBOX COLORING LOGIC ---
             if mode_label and mode_label.winfo_exists() and usb_lock_checkbox and usb_lock_checkbox.winfo_exists():
                 
-                # REVISED: Only use MODE_TYPE for status text
+                # REVISED: Use mode_label_text for status text
                 if MODE_TYPE == "USB_DIRECT" or MODE_TYPE == "HYBRID":
                     if not usb_devices_present:
                         # USB Mode, Disconnected: RED status and checkbox
-                        mode_label.config(text=f"Current Mode: {MODE_TYPE} (USB DISCONNECTED!)", fg="red")
+                        mode_label.config(text=f"{mode_label_text} (USB DISCONNECTED!)", fg="red")
                         usb_lock_checkbox.config(bg=USB_UNAVAILABLE_COLOR, activebackground=USB_UNAVAILABLE_ACTIVE_COLOR)
                     else:
                         # USB Mode, Connected: GREEN status and checkbox
-                        mode_label.config(text=f"Current Mode: {MODE_TYPE} (USB CONNECTED)", fg=USB_AVAILABLE_COLOR) 
+                        mode_label.config(text=f"{mode_label_text} (USB CONNECTED)", fg=USB_AVAILABLE_COLOR) 
                         usb_lock_checkbox.config(bg=USB_AVAILABLE_COLOR, activebackground=USB_AVAILABLE_ACTIVE_COLOR) 
                 
                 elif MODE_TYPE == "BT":
                     if usb_devices_present:
                         # BT Mode, USB Available: GREEN status and checkbox
-                        mode_label.config(text=f"Current Mode: {MODE_TYPE} (USB AVAILABLE)", fg=USB_AVAILABLE_COLOR)
+                        mode_label.config(text=f"{mode_label_text} (USB AVAILABLE)", fg=USB_AVAILABLE_COLOR)
                         usb_lock_checkbox.config(bg=USB_AVAILABLE_COLOR, activebackground=USB_AVAILABLE_ACTIVE_COLOR)
                     else:
                         # BT Mode, USB Unavailable: Default status and checkbox
-                        mode_label.config(text=f"Current Mode: {MODE_TYPE}", fg=DARK_FG)
+                        mode_label.config(text=f"{mode_label_text}", fg=DARK_FG)
                         usb_lock_checkbox.config(bg=DARK_BG, activebackground=DARK_BG)
             
             # --- END STATUS LABEL AND CHECKBOX COLORING LOGIC ---
