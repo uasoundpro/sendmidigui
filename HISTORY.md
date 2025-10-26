@@ -2,7 +2,7 @@
 
 This document outlines the key functional and structural changes made to the `SendMidiGui.py` script, primarily focusing on the evolution of the MIDI connection management and control features.
 
-## VERSION 1.1
+## VERSION 1.1.x
 DATE: 2025-10-25
 
 ## 🔒 I. USB Lock and Monitoring Reliability
