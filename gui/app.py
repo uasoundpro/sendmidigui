@@ -24,11 +24,12 @@ class MidiSenderApp:
             self.midi_device = os.environ.get("MIDI_DEVICE", config.DEFAULT_DEVICE)
             self.mode_type = os.environ.get("MODE_TYPE", "BT")
             self.debug_enabled = self.config.get("debug_enabled", False)
-
-            # --- !! ADDED THIS LINE !! ---
-            # Create the Tkinter variable for the debug checkbox
             self.debug_var = tk.BooleanVar(value=self.debug_enabled)
-            # --- !! END ADDITION !! ---
+
+            # --- !! NEW: Load CH1 override state !! ---
+            self.ch1_override_active = self.config.get("ch1_override_active", False)
+            self.ch1_override_var = tk.BooleanVar(value=self.ch1_override_active)
+            # --- !! END NEW !! ---
 
             self.midi_manager.set_mode(self.midi_device, self.mode_type, self.debug_enabled)
 
@@ -57,6 +58,10 @@ class MidiSenderApp:
             self._build_gui()
             self._load_and_display_patches()
 
+            # --- !! NEW: Update override checkbox state initially !! ---
+            self._update_override_checkbox_state()
+            # --- !! END NEW !! ---
+
             self.midi_manager.start_receivemidi()
             self.midi_manager.start_monitoring()
 
@@ -83,8 +88,9 @@ class MidiSenderApp:
             except Exception as e:
                 print(f"Icon load error: {e}")
 
-        window_width = 500
-        window_height = 1150
+        window_width = 650
+        # Increased height slightly for the new checkbox
+        window_height = 1180
 
         self.root.update_idletasks()
         screen_width = self.root.winfo_screenwidth()
@@ -135,30 +141,46 @@ class MidiSenderApp:
                   command=self.show_setlist_selection_popup, bg="#444444", fg=config.DARK_FG,
                   bd=0, padx=6, pady=6, height=2).pack(side="left", padx=(5, 0))
 
-        # --- USB Lock Checkbox (Remains the same) ---
-        initial_usb_lock_state = self.config.get("usb_lock_active", False)
-        self.usb_lock_var = tk.BooleanVar(value=initial_usb_lock_state)
-        self.usb_lock_checkbox = tk.Checkbutton(
-            controls_frame, text="Lock USB/Autoswitch", variable=self.usb_lock_var,
-            command=lambda: config.save_config(usb_lock_active=self.usb_lock_var.get()),
-            bg=config.DARK_BG, fg=config.DARK_FG, selectcolor=config.DARK_BG,
-            activebackground=config.DARK_BG, font=config.narrow_font_plain, relief="raised", bd=2
-        )
-        self.usb_lock_checkbox.pack(side="left", padx=(5, 0))
+        # --- !! NEW: Frame for stacked checkboxes !! ---
+        checkbox_frame = tk.Frame(controls_frame, bg=config.DARK_BG)
+        checkbox_frame.pack(side="left", padx=(5, 0), anchor="n")
+        # --- !! END NEW !! ---
 
-        # --- !! ADDED DEBUG CHECKBOX !! ---
-        debug_checkbox_main = tk.Checkbutton(
-            controls_frame,
-            text="Debug", # Keep it short
-            variable=self.debug_var, # Use the new variable
-            command=self.toggle_debug_logging, # Use the new method
+        # --- !! NEW: CH1 Override Checkbox (added to checkbox_frame) !! ---
+        self.ch1_override_checkbox = tk.Checkbutton(
+            checkbox_frame, text="Force CH1 Reroute (Hybrid)", variable=self.ch1_override_var, # Added (Hybrid) hint
+            command=self.toggle_ch1_override,
             bg=config.DARK_BG, fg=config.DARK_FG, selectcolor=config.DARK_BG,
             activebackground=config.DARK_BG, activeforeground=config.DARK_FG,
             font=config.narrow_font_plain, relief="raised", bd=2
         )
-        # Pack it next to the lock checkbox
-        debug_checkbox_main.pack(side="left", padx=(5, 0))
-        # --- !! END ADDITION !! ---
+        self.ch1_override_checkbox.pack(side="top", anchor="w") # Pack to top
+        # --- !! END NEW !! ---
+
+        # --- !! MODIFIED: Moved to checkbox_frame and packed below !! ---
+        initial_usb_lock_state = self.config.get("usb_lock_active", False)
+        self.usb_lock_var = tk.BooleanVar(value=initial_usb_lock_state)
+        self.usb_lock_checkbox = tk.Checkbutton(
+            checkbox_frame, text="Lock USB/Autoswitch", variable=self.usb_lock_var,
+            command=lambda: config.save_config(usb_lock_active=self.usb_lock_var.get()),
+            bg=config.DARK_BG, fg=config.DARK_FG, selectcolor=config.DARK_BG,
+            activebackground=config.DARK_BG, font=config.narrow_font_plain, relief="raised", bd=2
+        )
+        self.usb_lock_checkbox.pack(side="top", anchor="w", pady=(5,0)) # Pack to top, below new one
+        # --- !! END MODIFIED !! ---
+
+        # --- DEBUG CHECKBOX (Moved slightly) ---
+        debug_checkbox_main = tk.Checkbutton(
+            controls_frame,
+            text="Debug",
+            variable=self.debug_var,
+            command=self.toggle_debug_logging,
+            bg=config.DARK_BG, fg=config.DARK_FG, selectcolor=config.DARK_BG,
+            activebackground=config.DARK_BG, activeforeground=config.DARK_FG,
+            font=config.narrow_font_plain, relief="raised", bd=2
+        )
+        debug_checkbox_main.pack(side="left", padx=(5, 0), anchor="n")
+        # --- END DEBUG CHECKBOX ---
 
 
         up_button_frame = tk.Frame(self.root, bg=config.DARK_BG)
@@ -191,15 +213,25 @@ class MidiSenderApp:
                                   command=self.scroll_down, bg=config.BUTTON_BG, fg=config.DARK_FG, relief="raised", bd=2)
         self.btn_down.pack(fill="x")
 
-    # --- !! ADDED THIS METHOD !! ---
     def toggle_debug_logging(self):
         """Called when the main debug checkbox is clicked."""
         new_state = self.debug_var.get()
-        self.debug_enabled = new_state # Update app's internal state
-        self.midi_manager.set_debug_state(new_state) # Update manager's state
-        config.save_config(debug_enabled=new_state) # Save to config
-        print(f"Debug logging {'enabled' if new_state else 'disabled'} by main checkbox.") # User feedback
-    # --- !! END ADDITION !! ---
+        self.debug_enabled = new_state
+        self.midi_manager.set_debug_state(new_state)
+        config.save_config(debug_enabled=new_state)
+        print(f"Debug logging {'enabled' if new_state else 'disabled'} by main checkbox.")
+
+    # --- !! NEW: Handler for CH1 Override Checkbox !! ---
+    def toggle_ch1_override(self):
+        """Called when the CH1 override checkbox is clicked."""
+        new_state = self.ch1_override_var.get()
+        self.ch1_override_active = new_state
+        config.save_config(ch1_override_active=new_state)
+        print(f"CH1 Override {'enabled' if new_state else 'disabled'}.")
+        # Update color immediately
+        self._update_override_checkbox_state()
+        # The monitor loop will also pick this up on its next cycle if needed
+    # --- !! END NEW !! ---
 
 
     def scroll_up(self):
@@ -214,8 +246,7 @@ class MidiSenderApp:
 
     def show_toast(self, msg, duration=2000, bg="#303030", fg="white"):
         """
-        Thread-safe method to show a toast.
-        Schedules the toast to be shown on the main GUI thread.
+        Thread-safe method to show a toast. Schedules it on the main GUI thread.
         """
         if self.root and self.root.winfo_exists():
             self.root.after(0, self._show_toast_on_main_thread, msg, duration, bg, fg)
@@ -223,62 +254,85 @@ class MidiSenderApp:
     def _show_toast_on_main_thread(self, msg, duration=2000, bg="#303030", fg="white"):
         """Internal function that *must* run on the main thread."""
         try:
-            if not self.root or not self.root.winfo_exists():
-                return
-
-            if self.toast_timer:
-                self.root.after_cancel(self.toast_timer)
-                self.toast_timer = None
-
+            if not self.root or not self.root.winfo_exists(): return
+            if self.toast_timer: self.root.after_cancel(self.toast_timer); self.toast_timer = None
             if not self.toast_label or not self.toast_label.winfo_exists():
                 self.toast_label = tk.Label(self.root, font=config.narrow_font_small)
-
             self.toast_label.config(text=msg, bg=bg, fg=fg)
             self.toast_label.place(relx=1.0, rely=0, anchor="ne", x=-5, y=5)
             self.toast_label.lift()
-
             self.toast_timer = self.root.after(duration, self._hide_toast)
-
-        except Exception as e:
-            print(f"Error in _show_toast_on_main_thread (msg='{msg}', bg='{bg}'): {e}")
+        except Exception as e: print(f"Error in _show_toast_on_main_thread (msg='{msg}', bg='{bg}'): {e}")
 
     def _hide_toast(self):
         """Hides the persistent toast label. Runs on main thread."""
         try:
-            if self.root and self.root.winfo_exists() and \
-               self.toast_label and self.toast_label.winfo_exists():
+            if self.root and self.root.winfo_exists() and self.toast_label and self.toast_label.winfo_exists():
                 self.toast_label.place_forget()
             self.toast_timer = None
-        except Exception as e:
-            print(f"Error in _hide_toast: {e}")
+        except Exception as e: print(f"Error in _hide_toast: {e}")
 
+    # --- !! NEW: Helper to enable/disable override checkbox !! ---
+    def _update_override_checkbox_state(self):
+        """Enables/disables and styles the CH1 override checkbox based on mode."""
+        if hasattr(self, 'ch1_override_checkbox') and self.ch1_override_checkbox.winfo_exists():
+            is_hybrid = self.mode_type == "HYBRID"
+            new_state = tk.NORMAL if is_hybrid else tk.DISABLED
+            self.ch1_override_checkbox.config(state=new_state)
+
+            if not is_hybrid:
+                # If not hybrid, ensure it's unchecked and greyed out
+                self.ch1_override_var.set(False) # Force uncheck
+                self.ch1_override_checkbox.config(bg=config.DISABLED_BG, activebackground=config.DISABLED_BG, fg="#999999")
+            else:
+                 # If hybrid, set color based on whether it's *checked*
+                 is_checked = self.ch1_override_var.get()
+                 if is_checked:
+                    self.ch1_override_checkbox.config(bg=config.USB_UNAVAILABLE_COLOR, activebackground=config.USB_UNAVAILABLE_ACTIVE_COLOR, fg=config.DARK_FG)
+                 else:
+                    self.ch1_override_checkbox.config(bg=config.DARK_BG, activebackground=config.DARK_BG, fg=config.DARK_FG)
+    # --- !! END NEW !! ---
 
     def _set_device_mode(self, new_mode_type, new_device, should_relaunch=False):
-
+        """Sets the MIDI device and mode, optionally relaunching the app."""
         self.midi_manager.kill_receivemidi()
-        config.save_config(device=new_device)
+        config.save_config(device=new_device) # Save selected device
 
         self.midi_device = new_device
         self.mode_type = new_mode_type
 
-        # Pass the current debug state to the manager when mode changes
+        # Update manager state, passing the current debug state
         self.midi_manager.set_mode(self.midi_device, self.mode_type, self.debug_enabled)
 
-        if self.mode_label and self.mode_label.winfo_exists():
+        # Update GUI label if it exists
+        if hasattr(self, 'mode_label') and self.mode_label and self.mode_label.winfo_exists():
              self.mode_label.config(text=f"Current Mode: {self.mode_type}")
 
+        # --- !! NEW: Update checkbox state after mode change !! ---
+        self._update_override_checkbox_state()
+        # --- !! END NEW !! ---
+
         if should_relaunch:
-            config.save_config(relaunch_on_monitor_fail=True)
+            config.save_config(relaunch_on_monitor_fail=True) # Set relaunch flag
+            print(f"Relaunching into mode: {new_mode_type} with device: {new_device}")
             new_env = os.environ.copy()
             new_env["MIDI_DEBUG_ENABLED"] = str(self.debug_enabled)
-            subprocess.Popen([sys.executable, sys.argv[0]], env=new_env, creationflags=subprocess.CREATE_NO_WINDOW)
+            # Pass target device via env var for relaunch
+            new_env["RELAUNCH_MIDI_DEVICE"] = new_device
+            # Pass target mode via command line arg
+            relaunch_command = [sys.executable, sys.argv[0], f"--relaunch={new_mode_type}"]
+
+            subprocess.Popen(relaunch_command, env=new_env, creationflags=subprocess.CREATE_NO_WINDOW)
+
             if self.root and self.root.winfo_exists(): self.root.destroy()
             return
 
+        # If not relaunching, start receivemidi if needed
         self.midi_manager.start_receivemidi()
         self.show_toast(f"Switched to {self.mode_type} mode: {self.midi_device}")
 
     def _load_and_display_patches(self):
+        # (Function content unchanged - Keep previous version)
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.all_buttons.clear()
@@ -323,8 +377,14 @@ class MidiSenderApp:
             msg = f"Error: CSV file '{self.csv_file}' not found."
             print(msg)
             self.show_toast(msg, bg="red")
+        except Exception as e: # Catch other potential errors
+            msg = f"Error loading CSV '{self.csv_file}': {e}"
+            print(msg)
+            traceback.print_exc()
+            self.show_toast(msg, bg="red")
 
     def patch_func_factory(self, current_btn, label, prog1, prog2, cc_commands):
+        # (Function content unchanged - Keep previous version)
         def patch_func():
             now = time.time()
             if now - self.last_press_time < 1:
@@ -338,7 +398,6 @@ class MidiSenderApp:
                  try: current_btn.config(bg=config.HIGHLIGHT_BG)
                  except tk.TclError: pass
             self.last_selected_button = current_btn
-
 
             for b in self.all_buttons:
                 if b.winfo_exists():
@@ -367,57 +426,62 @@ class MidiSenderApp:
             if label == "TEST 123" and ["ch", "1", "pc", "126"] not in commands_ch1_before and self.mode_type != "BT":
                 commands_ch1_before.insert(0, ["ch", "1", "pc", "126"])
 
-
             def _send_patch_commands_in_thread():
                 root_exists = self.root and self.root.winfo_exists()
+                try: # Add try/except around MIDI sending
+                    for cmd in commands_ch1_before:
+                        self.midi_manager.send_midi([cmd])
+                    if commands_ch1_before:
+                        time.sleep(0.05)
 
-                for cmd in commands_ch1_before:
-                    self.midi_manager.send_midi([cmd])
-                if commands_ch1_before:
-                    time.sleep(0.05)
+                    self.midi_manager.start_receivemidi()
+                    time.sleep(1)
 
-                self.midi_manager.start_receivemidi()
-                time.sleep(1)
+                    if label == "TEST 123":
+                        def create_test_toast():
+                            if self.root and self.root.winfo_exists():
+                                if self.testing_toast_label and self.testing_toast_label.winfo_exists():
+                                    self.testing_toast_label.destroy()
+                                self.testing_toast_label = tk.Label(self.root, text="TESTING", bg="red", fg="white", font=config.big_font)
+                                self.testing_toast_label.place(relx=0.5, rely=0.1, anchor="n")
+                                self.testing_toast_label.lift()
 
-                if label == "TEST 123":
-                    def create_test_toast():
-                        if self.root and self.root.winfo_exists():
-                            if self.testing_toast_label and self.testing_toast_label.winfo_exists():
+                        if root_exists: self.root.after(0, create_test_toast)
+
+                        for cmd in commands_after:
+                            self.midi_manager.send_midi([cmd])
+                            time.sleep(0.25)
+
+                        if root_exists:
+                            self.root.after(0, lambda: [
                                 self.testing_toast_label.destroy()
-                            self.testing_toast_label = tk.Label(self.root, text="TESTING", bg="red", fg="white", font=config.big_font)
-                            self.testing_toast_label.place(relx=0.5, rely=0.1, anchor="n")
-                            self.testing_toast_label.lift()
+                                if self.testing_toast_label and self.testing_toast_label.winfo_exists() else None
+                            ])
 
-                    if root_exists: self.root.after(0, create_test_toast)
+                    else:
+                        for cmd in commands_after:
+                            self.midi_manager.send_midi([cmd])
+                            time.sleep(0.25)
 
-                    for cmd in commands_after:
-                        self.midi_manager.send_midi([cmd])
-                        time.sleep(0.25)
-
+                except Exception as midi_err:
+                    print(f"Error during MIDI send thread: {midi_err}")
+                    traceback.print_exc()
                     if root_exists:
-                         self.root.after(0, lambda: [
-                             b.config(state="normal") for b in self.all_buttons if b.winfo_exists()
-                         ])
-                         self.root.after(0, lambda: [
-                             self.testing_toast_label.destroy()
-                             if self.testing_toast_label and self.testing_toast_label.winfo_exists() else None
-                         ])
+                        self.root.after(0, lambda: self.show_toast(f"MIDI Send Error: {midi_err}", bg="red", duration=5000))
 
-                else:
-                    for cmd in commands_after:
-                        self.midi_manager.send_midi([cmd])
-                        time.sleep(0.25)
-
+                finally: # Ensure buttons are re-enabled even if an error occurs
                     if root_exists:
-                         self.root.after(0, lambda: [
-                             b.config(state="normal") for b in self.all_buttons if b.winfo_exists()
-                         ])
+                        self.root.after(0, lambda: [
+                            b.config(state="normal") for b in self.all_buttons if b.winfo_exists()
+                        ])
 
             threading.Thread(target=_send_patch_commands_in_thread, daemon=True).start()
 
         return patch_func
 
+
     def show_device_switch_popup(self):
+        # (Function content unchanged - Keep previous version)
         if self.device_switch_popup and self.device_switch_popup.winfo_exists():
             self.device_switch_popup.lift()
             return
@@ -445,6 +509,7 @@ class MidiSenderApp:
         btn_frame.pack(pady=20)
 
         def switch_and_close(mode, device):
+            # No need to save config here, _set_device_mode handles it
             self._set_device_mode(mode, device, should_relaunch=False)
             popup.destroy()
 
@@ -457,6 +522,7 @@ class MidiSenderApp:
 
 
     def list_devices(self):
+        # (Function content unchanged - Keep previous version)
         if self.list_devices_popup_window and self.list_devices_popup_window.winfo_exists():
             self.list_devices_popup_window.lift()
             return
@@ -493,6 +559,7 @@ class MidiSenderApp:
                 mode_type = "USB_DIRECT"
             if mode_type == "UNKNOWN": mode_type = "CUSTOM_NO_RX"
 
+            # _set_device_mode handles saving config
             self._set_device_mode(mode_type, actual_device, should_relaunch=False)
             popup.destroy()
 
@@ -507,6 +574,7 @@ class MidiSenderApp:
 
 
     def show_setlist_selection_popup(self):
+        # (Function content unchanged - Keep previous version)
         if self.setlist_popup_window and self.setlist_popup_window.winfo_exists():
             self.setlist_popup_window.lift()
             return
@@ -544,7 +612,7 @@ class MidiSenderApp:
             if selected_path.endswith(".txt"):
                 temp_csv = os.path.join(config.SCRIPT_PATH, "MidiList_Set.csv")
                 utils.create_ordered_setlist_csv(selected_path, config.CSV_FILE_DEFAULT_SOURCE, temp_csv)
-                self.csv_file = temp_csv
+                csv_to_save = temp_csv # Save path to generated CSV
 
                 display_name = os.path.basename(selected_path).replace(".txt", "")
                 try:
@@ -553,15 +621,19 @@ class MidiSenderApp:
                         if first_line: display_name = first_line
                 except Exception: pass
                 self.current_setlist_name = display_name
-            else:
-                shutil.copyfile(selected_path, config.CSV_FILE_DEFAULT)
-                self.csv_file = config.CSV_FILE_DEFAULT
+                self.csv_file = temp_csv # Update app's current CSV file
+
+            else: # Default CSV source selected
+                csv_to_save = selected_path # Save path to default source
+                shutil.copyfile(selected_path, config.CSV_FILE_DEFAULT) # Copy to working file
+                self.csv_file = config.CSV_FILE_DEFAULT # Update app's current CSV file
                 self.current_setlist_name = "Default Songs"
 
-            config.save_config(csv_file_used=self.csv_file,
+
+            config.save_config(csv_file_used=csv_to_save,
                                 current_setlist_display_name=self.current_setlist_name)
 
-            if self.setlist_display_label.winfo_exists():
+            if self.setlist_display_label and self.setlist_display_label.winfo_exists():
                 self.setlist_display_label.config(text=f"Setlist: {self.current_setlist_name}")
             self._load_and_display_patches()
             self.show_toast(f"Setlist loaded: {self.current_setlist_name}")
@@ -587,6 +659,7 @@ class MidiSenderApp:
 
 
     def _create_device_popup(self, title, message, ack_text, decline_text, is_failback):
+        # (Function content unchanged - Keep previous version)
         if self.device_change_popup and self.device_change_popup.winfo_exists():
             return
 
@@ -620,13 +693,20 @@ class MidiSenderApp:
             switch_choice[0] = True
             if is_failback:
                 self.midi_manager.set_user_declined_switch(False)
-            popup.destroy()
+            if popup.winfo_exists(): popup.destroy()
+            self.device_change_popup = None # Clear reference
+
 
         def on_decline():
             switch_choice[0] = False
             if is_failback:
                 self.midi_manager.set_user_declined_switch(True)
-            popup.destroy()
+            if popup.winfo_exists(): popup.destroy()
+            self.device_change_popup = None # Clear reference
+
+        # Handle closing via 'X' button
+        popup.protocol("WM_DELETE_WINDOW", on_decline if decline_text else on_ack)
+
 
         btn_frame = tk.Frame(popup, bg=config.DARK_BG)
         btn_frame.pack(pady=20)
@@ -639,81 +719,82 @@ class MidiSenderApp:
                       bg=("#28578f" if is_failback else "#444444"), fg="white").pack(side="right", padx=10)
 
         self.root.wait_window(popup)
-        self.device_change_popup = None
+        self.device_change_popup = None # Clear reference after wait_window returns
         return switch_choice[0]
 
 
     def handle_monitor_event(self, event_type, data=None):
         try:
-            # Uncomment for intense debugging
-            # print(f"DEBUG: handle_monitor_event received: Type={event_type}, Data={data}")
-
             if event_type == "TOAST":
                 message = data.get("message", "No message")
                 color = data.get("color", "#303030")
                 self.show_toast(message, bg=color)
 
             elif event_type == "MIDI_ACTIVITY":
-                # Uncomment for intense debugging
-                # print(f"DEBUG: Processing MIDI_ACTIVITY: {data}")
                 status = data.get("status")
-                if status == "SENDING":
-                    self.show_toast("SENDING", duration=250, bg=config.TOAST_YELLOW, fg="#000000")
-                elif status == "RECEIVING":
-                    self.show_toast("RECEIVING", duration=250, bg=config.TOAST_YELLOW, fg="#000000")
+                if status == "SENDING": self.show_toast("SENDING", duration=250, bg=config.TOAST_YELLOW, fg="#000000")
+                elif status == "RECEIVING": self.show_toast("RECEIVING", duration=250, bg=config.TOAST_YELLOW, fg="#000000")
 
             elif event_type == "GET_USB_LOCK_STATE":
-                # Need to check if var exists and return value safely
                 if hasattr(self, 'usb_lock_var') and self.usb_lock_var:
-                    try:
-                        return self.usb_lock_var.get()
-                    except tk.TclError: # Handle case where window/var is destroyed
-                        return False
-                return False # Default if var not ready
+                    try: return self.usb_lock_var.get()
+                    except tk.TclError: return False
+                return False
+
+            # --- !! NEW: Getter for CH1 Override !! ---
+            elif event_type == "GET_CH1_OVERRIDE_STATE":
+                if hasattr(self, 'ch1_override_var') and self.ch1_override_var:
+                    try: return self.ch1_override_var.get()
+                    except tk.TclError: return False
+                return False
+            # --- !! END NEW !! ---
 
             elif event_type == "USB_STATUS_UPDATE":
-                # Add checks for widget existence
-                if not data or not hasattr(self, 'mode_label') or not self.mode_label or not self.mode_label.winfo_exists():
-                    return
+                if not data or not hasattr(self, 'mode_label') or not self.mode_label or not self.mode_label.winfo_exists(): return
 
                 label_text = data["mode_label_text"]
                 usb_present = data["usb_devices_present"]
                 current_mode = data["current_mode"]
+                ch1_override_on = data.get("ch1_override_active", False) # --- !! NEW !! ---
 
                 checkbox_exists = hasattr(self, 'usb_lock_checkbox') and self.usb_lock_checkbox and self.usb_lock_checkbox.winfo_exists()
+                # override_checkbox_exists = hasattr(self, 'ch1_override_checkbox') and self.ch1_override_checkbox and self.ch1_override_checkbox.winfo_exists() # Not needed here directly
 
                 if current_mode == "USB_DIRECT" or current_mode == "HYBRID":
                     if not usb_present:
                         self.mode_label.config(text=label_text, fg="red")
-                        if checkbox_exists:
-                            self.usb_lock_checkbox.config(bg=config.USB_UNAVAILABLE_COLOR, activebackground=config.USB_UNAVAILABLE_ACTIVE_COLOR)
+                        if checkbox_exists: self.usb_lock_checkbox.config(bg=config.USB_UNAVAILABLE_COLOR, activebackground=config.USB_UNAVAILABLE_ACTIVE_COLOR)
                     else:
                         self.mode_label.config(text=label_text, fg=config.USB_AVAILABLE_COLOR)
-                        if checkbox_exists:
-                             self.usb_lock_checkbox.config(bg=config.USB_AVAILABLE_COLOR, activebackground=config.USB_AVAILABLE_ACTIVE_COLOR)
-
+                        if checkbox_exists: self.usb_lock_checkbox.config(bg=config.USB_AVAILABLE_COLOR, activebackground=config.USB_AVAILABLE_ACTIVE_COLOR)
                 elif current_mode == "BT":
                     if usb_present:
                         self.mode_label.config(text=f"{label_text} (USB AVAILABLE)", fg=config.USB_AVAILABLE_COLOR)
-                        if checkbox_exists:
-                             self.usb_lock_checkbox.config(bg=config.USB_AVAILABLE_COLOR, activebackground=config.USB_AVAILABLE_ACTIVE_COLOR)
+                        if checkbox_exists: self.usb_lock_checkbox.config(bg=config.USB_AVAILABLE_COLOR, activebackground=config.USB_AVAILABLE_ACTIVE_COLOR)
                     else:
                         self.mode_label.config(text=label_text, fg=config.DARK_FG)
-                        if checkbox_exists:
-                             self.usb_lock_checkbox.config(bg=config.DARK_BG, activebackground=config.DARK_BG)
+                        if checkbox_exists: self.usb_lock_checkbox.config(bg=config.DARK_BG, activebackground=config.DARK_BG)
+
+                # --- !! NEW: Update CH1 Override checkbox color/state !! ---
+                # Call the helper function which now handles enable/disable too
+                self._update_override_checkbox_state()
+                # --- !! END NEW !! ---
 
             elif event_type == "TRIGGER_FAILOVER":
-                message = "USB Device failed! Check MIDIberry settings. Defaulting to BLUETOOTH connection\n(power on rack WIDI jack first)."
-                self._create_device_popup("USB Device Disconnected!", message, "OK", None, False)
+                # Removed the popup creation here, just toast and relaunch
+                self.show_toast("USB Disconnected! Failing over to Bluetooth...", bg="red", duration=4000)
                 self._set_device_mode("BT", config.DEFAULT_DEVICE, should_relaunch=True)
 
             elif event_type == "TRIGGER_FAILBACK_POPUP":
-                message = "Both Morningstar MC8 Pro and Quad Cortex MIDI Control\nhave reconnected via USB. Do you want to switch back to USB Direct mode?"
+                message = f"Both {config.HYBRID_DEVICE} and {config.QUAD_CORTEX_DEVICE}\nhave reconnected via USB. Do you want to switch back to USB Direct mode?"
                 choice = self._create_device_popup("USB Devices Reconnected!", message,
                                                    "Acknowledge & Switch to USB Direct", "No, stay on Bluetooth", True)
 
-                if choice == True:
+                if choice is True:
+                    print("User chose to failback to USB_DIRECT. Relaunching...")
                     self._set_device_mode("USB_DIRECT", config.USB_DIRECT_DEVICE, should_relaunch=True)
+                else:
+                    print("User declined failback or closed popup.")
 
         except Exception as e:
             print(f"---!! FATAL ERROR in handle_monitor_event !!---")

@@ -38,12 +38,10 @@ class MidiManager:
             self._user_declined_usb_switch = False
             self._usb_disconnect_warning_shown = False
 
-    # --- !! ADDED THIS METHOD !! ---
     def set_debug_state(self, enabled):
         """Allows the GUI to update the debug state dynamically."""
         self.debug_enabled = enabled
         print(f"MidiManager debug state set to: {enabled}")
-    # --- !! END ADDITION !! ---
 
     def send_midi(self, command_list):
         for command in command_list:
@@ -59,17 +57,13 @@ class MidiManager:
             full_cmd = [config.SENDMIDI_PATH, "dev", target_device]
             full_cmd.extend([str(arg) for arg in command])
 
-            # This print is already conditional
             if self.debug_enabled:
                 print(f"[MIDI DEBUG] Executing: {' '.join(full_cmd)}")
 
-            # --- !! MADE THIS CONDITIONAL !! ---
             if self.debug_enabled:
                 print("DEBUG: Sending MIDI_ACTIVITY signal (SENDING)")
-            # --- !! END CHANGE !! ---
             self.gui_callback("MIDI_ACTIVITY", {"status": "SENDING"})
 
-            # Use CREATE_NO_WINDOW to hide console flash for sendmidi
             subprocess.run(full_cmd, creationflags=subprocess.CREATE_NO_WINDOW)
 
 
@@ -77,22 +71,17 @@ class MidiManager:
         while self._receivemidi_process and self._receivemidi_process.poll() is None:
             line = pipe.readline()
             if line:
-                # --- !! MADE THIS CONDITIONAL !! ---
                 if self.debug_enabled:
                     print("DEBUG: Sending MIDI_ACTIVITY signal (RECEIVING)")
-                # --- !! END CHANGE !! ---
                 self.gui_callback("MIDI_ACTIVITY", {"status": "RECEIVING"})
-                print(f"[receivemidi {stream_name}]: {line.strip()}") # Keep this one always
+                print(f"[receivemidi {stream_name}]: {line.strip()}")
             else:
                 time.sleep(0.01)
-        # Read remaining lines after process ends
         for line in pipe.readlines():
-             # --- !! MADE THIS CONDITIONAL !! ---
             if self.debug_enabled:
                 print("DEBUG: Sending MIDI_ACTIVITY signal (RECEIVING - final read)")
-            # --- !! END CHANGE !! ---
             self.gui_callback("MIDI_ACTIVITY", {"status": "RECEIVING"})
-            print(f"[receivemidi {stream_name}]: {line.strip()}") # Keep this one always
+            print(f"[receivemidi {stream_name}]: {line.strip()}")
         print(f"receivemidi {stream_name} reader thread finished.")
 
 
@@ -131,7 +120,7 @@ class MidiManager:
             ]
             print(f"Launching receivemidi: {' '.join(receivemidi_cmd)}")
             self._receivemidi_process = subprocess.Popen(receivemidi_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                                        text=True, creationflags=subprocess.CREATE_NO_WINDOW) # Hide console window
+                                                        text=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
             self._receivemidi_stdout_thread = threading.Thread(target=self._read_receivemidi_output,
                                                               args=(self._receivemidi_process.stdout, "stdout"))
@@ -151,7 +140,6 @@ class MidiManager:
 
     def list_devices(self):
         try:
-            # Use CREATE_NO_WINDOW to prevent flash
             result = subprocess.run([config.SENDMIDI_PATH, "list"], capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
             return result.stdout.strip().splitlines()
         except Exception as e:
@@ -179,53 +167,78 @@ class MidiManager:
             quad_cortex_present = config.QUAD_CORTEX_DEVICE in devices
             usb_devices_present = morningstar_present and quad_cortex_present
 
+            # --- !! NEW: Get CH1 override state from GUI !! ---
+            ch1_override_active = False
+            if self._root and self._root.winfo_exists():
+                ch1_override_active = self.gui_callback("GET_CH1_OVERRIDE_STATE")
+            # --- !! END NEW !! ---
+
             mode_label_text = f"Current Mode: {self.mode_type}"
             if self.mode_type == "HYBRID":
-                if not quad_cortex_present:
+                # --- !! MODIFIED: Added ch1_override_active check !! ---
+                if ch1_override_active or not quad_cortex_present:
+                    # REROUTE QC messages (Ch 1) to MC8 (Hybrid Device)
                     self._qc_midi_target_device = config.HYBRID_DEVICE
-                    mode_label_text = f"Current Mode: {self.mode_type} (QC REROUTED to MC8)"
+                    # Update label text based on *why* it's rerouted
+                    if ch1_override_active:
+                        mode_label_text = f"Current Mode: {self.mode_type} (QC OVERRIDE to MC8)"
+                    else:
+                        mode_label_text = f"Current Mode: {self.mode_type} (QC REROUTED to MC8)"
+                # --- !! END MODIFICATION !! ---
                 else:
+                    # Use QC (Ch 1) directly if present and not overridden
                     self._qc_midi_target_device = config.QUAD_CORTEX_DEVICE
                     mode_label_text = f"Current Mode: {self.mode_type} (QC DIRECT)"
             else:
+                # All other modes, QC target is direct
                 self._qc_midi_target_device = config.QUAD_CORTEX_DEVICE
 
+            # --- !! MODIFIED: Pass override state back !! ---
             status_data = {
                 "mode_label_text": mode_label_text,
                 "usb_devices_present": usb_devices_present,
-                "current_mode": self.mode_type
+                "current_mode": self.mode_type,
+                "ch1_override_active": ch1_override_active # Pass state to GUI
             }
+            # --- !! END MODIFICATION !! ---
             if self._root and self._root.winfo_exists():
                  self._root.after(0, lambda: self.gui_callback("USB_STATUS_UPDATE", status_data))
 
             usb_lock_active = False
             if self._root and self._root.winfo_exists():
-                 # Ensure callback runs on main thread if GET_USB_LOCK_STATE needs GUI access
-                 # Note: This makes the check slightly delayed, which might be an issue.
-                 # Consider pushing state *to* manager instead.
                  usb_lock_active = self.gui_callback("GET_USB_LOCK_STATE")
 
+            # --- Failover Logic ---
+            trigger_failover = False
+            if self.mode_type == "USB_DIRECT":
+                if not usb_devices_present: trigger_failover = True
+            elif self.mode_type == "HYBRID":
+                if not morningstar_present: trigger_failover = True # Hybrid only cares about MC8
 
-            if self.mode_type == "USB_DIRECT" or self.mode_type == "HYBRID":
-                if not usb_devices_present:
-                    if usb_lock_active:
-                        if not self._usb_disconnect_warning_shown:
-                             if self._root and self._root.winfo_exists():
-                                self._root.after(0, lambda: self.gui_callback("TOAST", {"message": "USB disconnected! Switch to BT prevented by lock.", "color": "red"}))
-                             self._usb_disconnect_warning_shown = True
-                    else:
-                        self._user_declined_usb_switch = False
-                        self._usb_disconnect_warning_shown = False
-                        self.kill_receivemidi()
-
-                        if self._root and self._root.winfo_exists():
-                            self._root.after(0, lambda: self.gui_callback("TRIGGER_FAILOVER"))
-                        return # Stop monitoring as relaunch is pending
+            if trigger_failover:
+                if usb_lock_active:
+                    if not self._usb_disconnect_warning_shown:
+                         if self._root and self._root.winfo_exists():
+                            msg = "USB Device(s) disconnected! Switch to BT prevented by lock." \
+                                  if self.mode_type == "USB_DIRECT" else \
+                                  f"{config.HYBRID_DEVICE} disconnected! Switch to BT prevented by lock."
+                            self._root.after(0, lambda m=msg: self.gui_callback("TOAST", {"message": m, "color": "red"}))
+                         self._usb_disconnect_warning_shown = True
                 else:
+                    self._user_declined_usb_switch = False
                     self._usb_disconnect_warning_shown = False
+                    self.kill_receivemidi()
+                    if self._root and self._root.winfo_exists():
+                        self._root.after(0, lambda: self.gui_callback("TRIGGER_FAILOVER"))
+                    return
+            else:
+                 self._usb_disconnect_warning_shown = False
+            # --- End Failover Logic ---
 
-            elif self.mode_type == "BT":
-                if usb_devices_present:
+
+            # --- Failback Logic (BT Mode check) ---
+            if self.mode_type == "BT":
+                if usb_devices_present: # Only check for failback if *both* are back
                     if self._usb_stable_start_time is None:
                         self._usb_stable_start_time = time.time()
                         if self._root and self._root.winfo_exists():
@@ -243,6 +256,7 @@ class MidiManager:
                 else:
                     self._usb_stable_start_time = None
                     self._user_declined_usb_switch = False
+            # --- End Failback Logic ---
 
         except Exception as e:
             print(f"Device check failed: {e}")

@@ -2,3 +2,6 @@
 /sendmidi
 /zzzArchive
 config.json
+/gui/__pycache__
+/Setlist
+debug_log.txt
