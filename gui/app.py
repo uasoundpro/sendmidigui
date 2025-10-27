@@ -29,6 +29,11 @@ class MidiSenderApp:
             self.debug_enabled = self.config.get("debug_enabled", False)
             self.debug_var = tk.BooleanVar(value=self.debug_enabled)
 
+            # --- !! NEW: Load CH1 override state !! ---
+            self.ch1_override_active = self.config.get("ch1_override_active", False)
+            self.ch1_override_var = tk.BooleanVar(value=self.ch1_override_active)
+            # --- !! END NEW !! ---
+
             self.midi_manager.set_mode(self.midi_device, self.mode_type, self.debug_enabled)
 
             # Clear flag if it exists (though not used for relaunch signal anymore)
@@ -57,6 +62,10 @@ class MidiSenderApp:
             self._build_gui()
             self._load_and_display_patches()
 
+            # --- !! NEW: Update override checkbox state initially !! ---
+            self._update_override_checkbox_state()
+            # --- !! END NEW !! ---
+
             self.midi_manager.start_receivemidi()
             self.midi_manager.start_monitoring()
 
@@ -83,8 +92,8 @@ class MidiSenderApp:
             except Exception as e:
                 print(f"Icon load error: {e}")
 
-        window_width = 500
-        window_height = 1150
+        window_width = 650
+        window_height = 1150 # Adjusted height slightly if needed for checkbox text
 
         self.root.update_idletasks()
         screen_width = self.root.winfo_screenwidth()
@@ -136,15 +145,33 @@ class MidiSenderApp:
                   command=self.show_setlist_selection_popup, bg="#444444", fg=config.DARK_FG,
                   bd=0, padx=6, pady=6, height=2).pack(side="left", padx=(5, 0))
 
+        # --- !! NEW: Frame for stacked checkboxes !! ---
+        checkbox_frame = tk.Frame(controls_frame, bg=config.DARK_BG)
+        checkbox_frame.pack(side="left", padx=(5, 0), anchor="n")
+        # --- !! END NEW !! ---
+
+        # --- !! NEW: CH1 Override Checkbox (added to checkbox_frame) !! ---
+        self.ch1_override_checkbox = tk.Checkbutton(
+            checkbox_frame, text="Force CH1 Reroute (Hybrid)", variable=self.ch1_override_var, # Added (Hybrid) hint
+            command=self.toggle_ch1_override,
+            bg=config.DARK_BG, fg=config.DARK_FG, selectcolor=config.DARK_BG,
+            activebackground=config.DARK_BG, activeforeground=config.DARK_FG,
+            font=config.narrow_font_plain, relief="raised", bd=2
+        )
+        self.ch1_override_checkbox.pack(side="top", anchor="w") # Pack to top
+        # --- !! END NEW !! ---
+
+        # --- !! MODIFIED: Moved to checkbox_frame and packed below !! ---
         initial_usb_lock_state = self.config.get("usb_lock_active", False)
         self.usb_lock_var = tk.BooleanVar(value=initial_usb_lock_state)
         self.usb_lock_checkbox = tk.Checkbutton(
-            controls_frame, text="Lock USB/Autoswitch", variable=self.usb_lock_var,
+            checkbox_frame, text="Lock USB/Autoswitch", variable=self.usb_lock_var,
             command=lambda: config.save_config(usb_lock_active=self.usb_lock_var.get()),
             bg=config.DARK_BG, fg=config.DARK_FG, selectcolor=config.DARK_BG,
             activebackground=config.DARK_BG, font=config.narrow_font_plain, relief="raised", bd=2
         )
-        self.usb_lock_checkbox.pack(side="left", padx=(5, 0))
+        self.usb_lock_checkbox.pack(side="top", anchor="w", pady=(5,0)) # Pack to top, below new one
+        # --- !! END MODIFIED !! ---
 
         debug_checkbox_main = tk.Checkbutton(
             controls_frame,
@@ -155,7 +182,7 @@ class MidiSenderApp:
             activebackground=config.DARK_BG, activeforeground=config.DARK_FG,
             font=config.narrow_font_plain, relief="raised", bd=2
         )
-        debug_checkbox_main.pack(side="left", padx=(5, 0))
+        debug_checkbox_main.pack(side="left", padx=(5, 0), anchor="n")
 
 
         up_button_frame = tk.Frame(self.root, bg=config.DARK_BG)
@@ -196,6 +223,18 @@ class MidiSenderApp:
         config.save_config(debug_enabled=new_state)
         print(f"Debug logging {'enabled' if new_state else 'disabled'} by main checkbox.")
 
+    # --- !! NEW: Handler for CH1 Override Checkbox !! ---
+    def toggle_ch1_override(self):
+        """Called when the CH1 override checkbox is clicked."""
+        new_state = self.ch1_override_var.get()
+        self.ch1_override_active = new_state
+        config.save_config(ch1_override_active=new_state)
+        print(f"CH1 Override {'enabled' if new_state else 'disabled'}.")
+        # Update color immediately
+        self._update_override_checkbox_state()
+        # The monitor loop will also pick this up on its next cycle if needed
+    # --- !! END NEW !! ---
+
 
     def scroll_up(self):
         self.btn_up.config(relief="sunken")
@@ -235,6 +274,26 @@ class MidiSenderApp:
             self.toast_timer = None
         except Exception as e: print(f"Error in _hide_toast: {e}")
 
+    # --- !! NEW: Helper to enable/disable override checkbox !! ---
+    def _update_override_checkbox_state(self):
+        """Enables/disables and styles the CH1 override checkbox based on mode."""
+        if hasattr(self, 'ch1_override_checkbox') and self.ch1_override_checkbox.winfo_exists():
+            is_hybrid = self.mode_type == "HYBRID"
+            new_state = tk.NORMAL if is_hybrid else tk.DISABLED
+            self.ch1_override_checkbox.config(state=new_state)
+
+            if not is_hybrid:
+                # If not hybrid, ensure it's unchecked and greyed out
+                self.ch1_override_var.set(False) # Force uncheck
+                self.ch1_override_checkbox.config(bg=config.DISABLED_BG, activebackground=config.DISABLED_BG, fg="#999999")
+            else:
+                 # If hybrid, set color based on whether it's *checked*
+                 is_checked = self.ch1_override_var.get()
+                 if is_checked:
+                    self.ch1_override_checkbox.config(bg=config.USB_UNAVAILABLE_COLOR, activebackground=config.USB_UNAVAILABLE_ACTIVE_COLOR, fg=config.DARK_FG)
+                 else:
+                    self.ch1_override_checkbox.config(bg=config.DARK_BG, activebackground=config.DARK_BG, fg=config.DARK_FG)
+    # --- !! END NEW !! ---
 
     def _set_device_mode(self, new_mode_type, new_device, should_relaunch=False):
         """Sets the MIDI device and mode, optionally relaunching the app."""
@@ -250,6 +309,10 @@ class MidiSenderApp:
         # Update GUI label if it exists
         if hasattr(self, 'mode_label') and self.mode_label and self.mode_label.winfo_exists():
              self.mode_label.config(text=f"Current Mode: {self.mode_type}")
+
+        # --- !! NEW: Update checkbox state after mode change !! ---
+        self._update_override_checkbox_state()
+        # --- !! END NEW !! ---
 
         if should_relaunch:
             print(f"Relaunching into mode: {new_mode_type} with device: {new_device}")
@@ -493,13 +556,13 @@ class MidiSenderApp:
         def select_new_device(device_name):
             mode_type = "UNKNOWN"
             actual_device = device_name
-            
+
             if device_name == config.DEVICE_NAME_CH2: mode_type = "USB_DIRECT"
             elif device_name == config.DEVICE_NAME_BT: mode_type = "BT"
             elif device_name == config.DEVICE_NAME_CH1:
                 actual_device = config.DEVICE_NAME_CH2
                 mode_type = "USB_DIRECT"
-                
+
             if mode_type == "UNKNOWN": mode_type = "CUSTOM_NO_RX"
 
             # Save the manually selected device here
@@ -661,7 +724,6 @@ class MidiSenderApp:
 
 
     def handle_monitor_event(self, event_type, data=None):
-        # (Function content mostly unchanged, just ensure failback logic calls _set_device_mode correctly)
         try:
             if event_type == "TOAST":
                 message = data.get("message", "No message")
@@ -679,13 +741,24 @@ class MidiSenderApp:
                     except tk.TclError: return False
                 return False
 
+            # --- !! NEW: Getter for CH1 Override !! ---
+            elif event_type == "GET_CH1_OVERRIDE_STATE":
+                if hasattr(self, 'ch1_override_var') and self.ch1_override_var:
+                    try: return self.ch1_override_var.get()
+                    except tk.TclError: return False
+                return False
+            # --- !! END NEW !! ---
+
             elif event_type == "USB_STATUS_UPDATE":
                 if not data or not hasattr(self, 'mode_label') or not self.mode_label or not self.mode_label.winfo_exists(): return
 
                 label_text = data["mode_label_text"]
                 usb_present = data["usb_devices_present"]
                 current_mode = data["current_mode"]
+                ch1_override_on = data.get("ch1_override_active", False) # --- !! NEW !! ---
+
                 checkbox_exists = hasattr(self, 'usb_lock_checkbox') and self.usb_lock_checkbox and self.usb_lock_checkbox.winfo_exists()
+                override_checkbox_exists = hasattr(self, 'ch1_override_checkbox') and self.ch1_override_checkbox and self.ch1_override_checkbox.winfo_exists() # --- !! NEW !! ---
 
                 if current_mode == "USB_DIRECT" or current_mode == "HYBRID":
                     if not usb_present:
@@ -701,6 +774,11 @@ class MidiSenderApp:
                     else:
                         self.mode_label.config(text=label_text, fg=config.DARK_FG)
                         if checkbox_exists: self.usb_lock_checkbox.config(bg=config.DARK_BG, activebackground=config.DARK_BG)
+
+                # --- !! NEW: Update CH1 Override checkbox color/state !! ---
+                # Call the helper function which now handles enable/disable too
+                self._update_override_checkbox_state()
+                # --- !! END NEW !! ---
 
             elif event_type == "TRIGGER_FAILOVER":
                 self.show_toast("USB Disconnected! Failing over to Bluetooth...", bg="red", duration=4000)

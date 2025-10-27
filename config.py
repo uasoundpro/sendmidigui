@@ -61,6 +61,7 @@ narrow_font_small = ("Arial", 9)
 # =================== GLOBAL CONFIG MANAGEMENT =====================
 def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, 
                 current_setlist_display_name=None, usb_lock_active=None, debug_enabled=None,
+                ch1_override_active=None, # --- !! NEW !! ---
                 DEVICE_NAME_BT=None, DEVICE_NAME_CH1=None, DEVICE_NAME_CH2=None):
     """Saves application configuration to config.json."""
     config = load_config() # Load existing config first
@@ -77,6 +78,11 @@ def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None,
         config["usb_lock_active"] = usb_lock_active
     if debug_enabled is not None:
         config["debug_enabled"] = debug_enabled
+        
+    # --- !! NEW !! ---
+    if ch1_override_active is not None:
+        config["ch1_override_active"] = ch1_override_active
+    # --- !! END NEW !! ---
         
     # --- !! NEWLY ADDED !! ---
     if DEVICE_NAME_BT is not None:

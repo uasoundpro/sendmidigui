@@ -186,25 +186,40 @@ class MidiManager:
             # Keep the definition of both devices needed for full USB functionality
             both_usb_devices_present = morningstar_present and quad_cortex_present
 
+            # --- !! NEW: Get CH1 override state from GUI !! ---
+            ch1_override_active = False
+            if self._root and self._root.winfo_exists():
+                ch1_override_active = self.gui_callback("GET_CH1_OVERRIDE_STATE")
+            # --- !! END NEW !! ---
+
             mode_label_text = f"Current Mode: {self.mode_type}"
             if self.mode_type == "HYBRID":
-                if not quad_cortex_present:
-                    # Reroute if QC (CH1) is missing, but MC8 (CH2) is present
+                # --- !! MODIFIED: Added ch1_override_active check !! ---
+                if ch1_override_active or not quad_cortex_present:
+                    # Reroute if QC (CH1) is missing OR override is checked
                     self._qc_midi_target_device = config.DEVICE_NAME_CH2
-                    mode_label_text = f"Current Mode: {self.mode_type} (QC REROUTED to MC8)"
+                    
+                    # Update label text based on *why* it's rerouted
+                    if ch1_override_active:
+                        mode_label_text = f"Current Mode: {self.mode_type} (QC OVERRIDE to MC8)"
+                    else:
+                        mode_label_text = f"Current Mode: {self.mode_type} (QC REROUTED to MC8)"
+                # --- !! END MODIFICATION !! ---
                 else:
-                    # Use QC (CH1) directly if present
+                    # Use QC (CH1) directly if present and not overridden
                     self._qc_midi_target_device = config.DEVICE_NAME_CH1
                     mode_label_text = f"Current Mode: {self.mode_type} (QC DIRECT)"
             else:
                 # In BT or USB_DIRECT, CH1 always targets the configured CH1 device
                 self._qc_midi_target_device = config.DEVICE_NAME_CH1
 
+
             # --- !! MODIFIED: Use 'both_usb_devices_present' for status !! ---
             status_data = {
                 "mode_label_text": mode_label_text,
                 "usb_devices_present": both_usb_devices_present, # Status reflects if *both* are OK
-                "current_mode": self.mode_type
+                "current_mode": self.mode_type,
+                "ch1_override_active": ch1_override_active # --- !! NEW: Pass state to GUI !! ---
             }
             # --- !! END MODIFICATION !! ---
 

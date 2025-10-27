@@ -6,3 +6,6 @@ debug_log.txt
 debug_log.txt
 Setlist/STFatHarborfest.txt
 /Setlist
+__pycache__/utils.cpython-314.pyc
+/__pycache__
+/gui/__pycache__
