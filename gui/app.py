@@ -81,7 +81,7 @@ class MidiSenderApp:
                  if self.root and self.root.winfo_exists(): self.root.destroy()
 
     def _setup_window(self):
-        self.root.title("MIDI Patch Sender")
+        self.root.title("MIDI Patch Sender v2.x.x EXPERIMENTAL")
         self.root.configure(bg=config.DARK_BG)
 
         if os.path.exists(config.ICON_FILE):
