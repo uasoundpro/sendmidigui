@@ -5,3 +5,5 @@ config.json
 /gui/__pycache__
 /Setlist
 debug_log.txt
+/gui/__pycache__
+/__pycache__
