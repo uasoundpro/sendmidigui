@@ -15,9 +15,9 @@ import shutil
 DEFAULT_DEVICE = "loopMIDI Port"
 ALT_DEVICE = "Morningstar MC8 Pro"
 # USB_DIRECT_DEVICE is the name used internally by sendmidi for the MC8 (USB Direct)
-USB_DIRECT_DEVICE = "Morningstar MC8 Pro" 
+USB_DIRECT_DEVICE = "Morningstar MC8 Pro"
 # HYBRID_DEVICE is the name used internally by sendmidi for the MC8 (Hybrid mode)
-HYBRID_DEVICE = "Morningstar MC8 Pro" 
+HYBRID_DEVICE = "Morningstar MC8 Pro"
 QUAD_CORTEX_DEVICE = "Quad Cortex MIDI Control"
 ICON_FILE = "sendmidi.ico"
 SCRIPT_PATH = os.path.abspath(__file__)
@@ -53,6 +53,7 @@ narrow_font_small = ("Arial", 9)
 setlist_display_label = None
 mode_label = None
 usb_lock_checkbox = None # Added for global access in monitor_midi_device
+ch1_override_checkbox = None # --- !! NEW !! --- Global access for override checkbox
 
 # Global variable for receivemidi process
 _receivemidi_process = None
@@ -64,7 +65,9 @@ _receivemidi_stderr_thread = None
 _qc_midi_target_device = QUAD_CORTEX_DEVICE
 
 # =================== GLOBAL CONFIG MANAGEMENT =====================
-def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, current_setlist_display_name=None, usb_lock_active=None, debug_enabled=None):
+def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None,
+                current_setlist_display_name=None, usb_lock_active=None, debug_enabled=None,
+                ch1_override_active=None): # --- !! NEW PARAM !! ---
     """Saves application configuration to config.json."""
     config = {}
     if os.path.exists(CONFIG_FILE):
@@ -85,9 +88,13 @@ def save_config(device=None, csv_file_used=None, relaunch_on_monitor_fail=None, 
         config["usb_lock_active"] = usb_lock_active
     if debug_enabled is not None:
         config["debug_enabled"] = debug_enabled
+    # --- !! NEW !! ---
+    if ch1_override_active is not None:
+        config["ch1_override_active"] = ch1_override_active
+    # --- !! END NEW !! ---
     config["last_run"] = time.time()  # Always update last_run
     with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f)
+        json.dump(config, f, indent=4) # Added indent for readability
 
 
 # =================== UTILITY FUNCTIONS (moved to global scope) =====================
@@ -184,6 +191,7 @@ def kill_receivemidi():
 
 
 # =================== SETLIST SELECTION PROMPT (initial launch) =====================
+# This function remains largely the same, just ensuring save_config is called correctly
 def choose_setlist():
     config = {}
     if os.path.exists(CONFIG_FILE):
@@ -270,7 +278,7 @@ def choose_setlist():
     def process_selected_setlist(selected_setlist_path, current_window):
         current_window.destroy()
         temp_csv = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList_Set.csv")
-        create_ordered_setlist_csv(selected_setlist_path, CSV_FILE_DEFAULT_SOURCE, temp_csv)
+
 
         # Initialize display_name with a fallback (filename)
         display_name = os.path.basename(selected_setlist_path).replace(".txt", "")
@@ -283,16 +291,18 @@ def choose_setlist():
             print(f"Error reading first line of {selected_setlist_path}: {e}")
 
         if selected_setlist_path.endswith(".txt"):
-            temp_csv = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList_Set.csv")
             create_ordered_setlist_csv(selected_setlist_path, CSV_FILE_DEFAULT_SOURCE, temp_csv)
-            # CSV_FILE is not globally updated here, the main app reads the config
+            csv_to_save = temp_csv # Save the generated setlist CSV path
             current_setlist_name_for_display = display_name  # Use the determined display_name
-        else:  # It's already a CSV (like MidiList-DEFAULT.csv)
-            # CSV_FILE is not globally updated here, the main app reads the config
+        else: # It's already a CSV (like MidiList-DEFAULT.csv from handle_default_launch)
+            # When default is chosen, we copied it to MidiList.csv in launch_with.
+            # We should save the *source* path (MidiList-DEFAULT.csv) in the config
+            # so the app knows which base file was used.
+            csv_to_save = CSV_FILE_DEFAULT_SOURCE
             current_setlist_name_for_display = "Default Songs"
 
-        save_config(csv_file_used=temp_csv,
-                    current_setlist_display_name=current_setlist_name_for_display)  # Save the new chosen CSV file and display name
+        save_config(csv_file_used=csv_to_save,
+                    current_setlist_display_name=current_setlist_name_for_display)
 
         choose_device_and_launch()
 
@@ -312,7 +322,8 @@ def choose_setlist():
 
     def handle_default_launch():
         setlist_window.destroy()
-        launch_with(CSV_FILE_DEFAULT_SOURCE, "Default Songs")  # Pass "Default Songs" as display name
+        # Pass the *source* default CSV path here
+        launch_with(CSV_FILE_DEFAULT_SOURCE, "Default Songs")
 
     tk.Button(frame, text="Setlist", font=big_font, width=12, height=2,
               command=choose_setlist_file, bg="#2a8f44", fg="white").grid(row=0, column=0, padx=10)
@@ -324,6 +335,7 @@ def choose_setlist():
 
 
 # ================== DEVICE SELECTION PROMPT =====================
+# This function remains largely the same
 def choose_device_and_launch():
     config = {}
     if os.path.exists(CONFIG_FILE):
@@ -344,15 +356,16 @@ def choose_device_and_launch():
         if mode == "BT":
             selected = DEFAULT_DEVICE
         elif mode == "HYBRID":
-            selected = HYBRID_DEVICE 
+            selected = HYBRID_DEVICE
         elif mode == "USB_DIRECT":
             selected = USB_DIRECT_DEVICE
         else: # Should not happen, fallback
             selected = DEFAULT_DEVICE
-        
+
         # Debug state is already saved by toggle_debug_logging command
         os.environ["MIDI_DEVICE"] = selected
         os.environ["MODE_TYPE"] = mode # Pass the mode type
+        save_config(device=selected) # Save chosen device here before launch
         launch_main_app()
 
     def timeout_default():
@@ -362,6 +375,7 @@ def choose_device_and_launch():
             # Debug state is already saved by toggle_debug_logging command
             os.environ["MIDI_DEVICE"] = DEFAULT_DEVICE
             os.environ["MODE_TYPE"] = "BT"
+            save_config(device=DEFAULT_DEVICE) # Save default device before launch
             launch_main_app()
 
     # Instance variable for the "List MIDI Devices" popup in the chooser window
@@ -376,7 +390,8 @@ def choose_device_and_launch():
             return
 
         try:
-            result = subprocess.run([SENDMIDI_PATH, "list"], capture_output=True, text=True)
+            # --- !! ADDED creationflags=subprocess.CREATE_NO_WINDOW !! ---
+            result = subprocess.run([SENDMIDI_PATH, "list"], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             device_list = result.stdout.strip().splitlines()
         except Exception as e:
             print(f"Error listing devices: {e}")
@@ -446,22 +461,23 @@ def choose_device_and_launch():
 
         if device_name == USB_DIRECT_DEVICE:
             mode_type = "USB_DIRECT"
-        elif device_name == HYBRID_DEVICE:
-            mode_type = "HYBRID"
-        elif device_name == DEFAULT_DEVICE:
+        elif device_name == HYBRID_DEVICE: # Check HYBRID before DEFAULT if they are the same string
+             mode_type = "HYBRID"
+        elif device_name == DEFAULT_DEVICE: # BT device
             mode_type = "BT"
         elif device_name == QUAD_CORTEX_DEVICE:
-            # If QC is selected directly, treat it as USB Direct/MC8 as that's the intended path
+            # If QC is selected directly, treat it as USB Direct/MC8
             actual_device_to_set = USB_DIRECT_DEVICE
             mode_type = "USB_DIRECT"
-        
-        # If the user selects a custom device, we assume it's like Hybrid (no receivemidi)
+
+        # If the user selects a custom device, assume it's like Hybrid (no receivemidi)
         if mode_type == "UNKNOWN":
             mode_type = "CUSTOM_NO_RX"
-        
+
         # Debug state is already saved by toggle_debug_logging command
         os.environ["MIDI_DEVICE"] = actual_device_to_set
         os.environ["MODE_TYPE"] = mode_type
+        save_config(device=actual_device_to_set) # Save chosen device here
         launch_main_app()
 
     chooser = tk.Tk()
@@ -489,15 +505,15 @@ def choose_device_and_launch():
                         command=lambda: select_device("HYBRID"), bg="#28578f", fg="white")
     btn_hybrid.grid(row=2, column=0, pady=5, padx=5)
     # --- END Vertical Stacking ---
-    
+
     # --- NEW DEBUG TOGGLE LOGIC ---
     initial_debug_state = config.get("debug_enabled", False)
     debug_var = tk.BooleanVar(value=initial_debug_state)
-    
+
     def toggle_debug_logging():
         # This saves the state immediately when the checkbox is clicked
         save_config(debug_enabled=debug_var.get())
-        
+
     debug_checkbox = tk.Checkbutton(
         chooser,
         text="Enable MIDI Debug Logging (Prints commands to console)",
@@ -535,9 +551,11 @@ def choose_device_and_launch():
     countdown()
     chooser.mainloop()
 
+
 # =================== LAUNCH MAIN GUI =====================
 def launch_main_app():
-    global CSV_FILE, setlist_display_label, mode_label, usb_lock_checkbox # Declare labels as global
+    global CSV_FILE, setlist_display_label, mode_label, usb_lock_checkbox, ch1_override_checkbox # Declare labels as global
+    global ch1_override_var # --- !! NEW !! --- Make the variable global too
 
     MIDI_DEVICE = os.environ.get("MIDI_DEVICE", DEFAULT_DEVICE)
     MODE_TYPE = os.environ.get("MODE_TYPE", "BT") # Retrieve the mode type
@@ -555,8 +573,9 @@ def launch_main_app():
         except Exception as e:
             print(f"Icon load error: {e}")
 
-    window_width = 500
-    window_height = 1150
+    window_width = 650
+    # Increased height slightly for the new checkbox
+    window_height = 1180
     screen_width = root.winfo_screenwidth()
     x = screen_width - window_width
     y = 0
@@ -581,10 +600,10 @@ def launch_main_app():
     # If this launch was due to monitor failure, reset the flag in config
     if config.get("relaunch_on_monitor_fail"):
         save_config(relaunch_on_monitor_fail=False)
-        
+
     # --- Set environment variable for debug state ---
-    initial_debug_state = config.get("debug_enabled", False) 
-    os.environ["MIDI_DEBUG_ENABLED"] = str(initial_debug_state) 
+    initial_debug_state = config.get("debug_enabled", False)
+    os.environ["MIDI_DEBUG_ENABLED"] = str(initial_debug_state)
     # --- END ---
 
     current_setlist_name_for_display = config.get("current_setlist_display_name", "Unknown Setlist")
@@ -592,6 +611,11 @@ def launch_main_app():
     # USB Lock Variable Initialization
     initial_usb_lock_state = config.get("usb_lock_active", False) # Default to False if not in config
     usb_lock_var = tk.BooleanVar(value=initial_usb_lock_state)
+
+    # --- !! NEW: CH1 Override Variable Initialization !! ---
+    initial_ch1_override_state = config.get("ch1_override_active", False)
+    ch1_override_var = tk.BooleanVar(value=initial_ch1_override_state)
+    # --- !! END NEW !! ---
 
     last_press_time = 0
     last_selected_button = None
@@ -604,24 +628,25 @@ def launch_main_app():
     # Instance variables for managing single popup windows from the main GUI
     setlist_popup_window_instance = None
     list_devices_popup_window_instance = None
-    device_change_popup_instance = None 
+    device_change_popup_instance = None
     device_switch_popup_instance = None
 
     def show_toast(msg, duration=2000, bg="#303030", fg="white"):
         # Destroy any existing general toast
         for widget in root.winfo_children():
             # Heuristic to identify toast (small label near the top)
-            if isinstance(widget, tk.Label) and widget.winfo_y() < 50 and widget != testing_toast_label: 
+            if isinstance(widget, tk.Label) and widget.winfo_y() < 50 and widget != testing_toast_label:
                 widget.destroy()
 
         toast = tk.Label(root, text=msg, bg=bg, fg=fg, font=narrow_font_small)
-        toast.place(relx=0.5, rely=0.01, anchor="n")
+        # Place toast slightly lower to avoid overlapping top controls
+        toast.place(relx=0.5, rely=0.03, anchor="n")
         root.after(duration, toast.destroy)
 
     def send_midi(command_list):
         # Access the global routing variable
         global _qc_midi_target_device
-        
+
         for command in command_list:
             # Determine the target device for the current command
             target_device = MIDI_DEVICE  # Default target is the globally selected MIDI_DEVICE
@@ -643,12 +668,13 @@ def launch_main_app():
             full_cmd = [SENDMIDI_PATH, "dev", target_device]
             # Ensure each element in the command is a string
             full_cmd.extend([str(arg) for arg in command])
-            
+
             # 💡 DEBUGGING LINE: Conditional based on environment variable set at launch
             if os.environ.get("MIDI_DEBUG_ENABLED") == "True":
                 print(f"[MIDI DEBUG] Executing: {' '.join(full_cmd)}")
-            
-            subprocess.run(full_cmd)
+            # --- !! ADDED creationflags=subprocess.CREATE_NO_WINDOW !! ---
+            subprocess.run(full_cmd, creationflags=subprocess.CREATE_NO_WINDOW)
+
 
     # Helper function to launch receivemidi
     def _launch_receivemidi_if_usb_direct():
@@ -664,8 +690,9 @@ def launch_main_app():
                     "pass", "Quad Cortex MIDI Control"
                 ]
                 print(f"Launching receivemidi: {' '.join(receivemidi_cmd)}")
+                # --- !! ADDED creationflags=subprocess.CREATE_NO_WINDOW !! ---
                 _receivemidi_process = subprocess.Popen(receivemidi_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                                        text=True)
+                                                        text=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
                 # Start threads to read stdout and stderr
                 _receivemidi_stdout_thread = threading.Thread(target=_read_receivemidi_output,
@@ -684,6 +711,8 @@ def launch_main_app():
                 show_toast(f"Error launching receivemidi: {e}", bg="red", duration=5000)
 
     # --- New functions for setlist selection from main GUI ---
+    # These remain unchanged from previous correct version
+
     def show_setlist_selection_popup():
         nonlocal setlist_popup_window_instance
 
@@ -763,8 +792,7 @@ def launch_main_app():
                                 bg=BUTTON_BG, fg=DARK_FG, activebackground=BUTTON_HL, activeforeground=DARK_FG)
                 btn.pack(pady=5, padx=10)
 
-
-        setlist_popup.mainloop()
+        # setlist_popup.mainloop() # Removed mainloop here
 
     def _process_selected_setlist_from_main_gui(selected_setlist_path, current_popup_window):
         global CSV_FILE, setlist_display_label
@@ -778,7 +806,7 @@ def launch_main_app():
 
         if selected_setlist_path.endswith(".txt"):
             create_ordered_setlist_csv(selected_setlist_path, CSV_FILE_DEFAULT_SOURCE, temp_csv)
-            CSV_FILE = temp_csv
+            csv_to_save = temp_csv # Save path to generated CSV
 
             display_name = os.path.basename(selected_setlist_path).replace(".txt", "")
             try:
@@ -790,13 +818,16 @@ def launch_main_app():
                 print(f"Error reading first line of {selected_setlist_path}: {e}")
 
             current_setlist_name_for_display = display_name
+            CSV_FILE = temp_csv # Update global CSV_FILE to point to the generated one
         else:
-            # If default is selected, use the default source path directly
+            # If default is selected, use the default source path directly for saving config
+            csv_to_save = selected_setlist_path # Save path to default source
+            # Copy default source to the working MidiList.csv
             shutil.copyfile(selected_setlist_path, os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv"))
-            CSV_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv")
+            CSV_FILE = os.path.join(os.path.dirname(SCRIPT_PATH), "MidiList.csv") # Update global CSV_FILE
             current_setlist_name_for_display = "Default Songs"
 
-        save_config(csv_file_used=CSV_FILE,
+        save_config(csv_file_used=csv_to_save, # Save the correct path (generated or default source)
                     current_setlist_display_name=current_setlist_name_for_display)
 
         if setlist_display_label and setlist_display_label.winfo_exists():
@@ -804,42 +835,72 @@ def launch_main_app():
 
         kill_receivemidi()
         _load_and_display_patches()
+        # Launch receivemidi again ONLY if needed after loading patches
+        _launch_receivemidi_if_usb_direct()
         show_toast(f"Setlist loaded: {current_setlist_name_for_display}")
 
     # --- End of new setlist functions ---
 
+    # --- !! NEW: Helper to enable/disable override checkbox !! ---
+    def _update_override_checkbox_state():
+        """Enables/disables and styles the CH1 override checkbox based on mode."""
+        nonlocal MODE_TYPE # Access variable from enclosing function
+        global ch1_override_checkbox, ch1_override_var # Access globals
+        if ch1_override_checkbox and ch1_override_checkbox.winfo_exists():
+            is_hybrid = MODE_TYPE == "HYBRID"
+            new_state = tk.NORMAL if is_hybrid else tk.DISABLED
+            ch1_override_checkbox.config(state=new_state)
+
+            if not is_hybrid:
+                # If not hybrid, ensure it's unchecked and greyed out
+                ch1_override_var.set(False) # Force uncheck
+                ch1_override_checkbox.config(bg=DISABLED_BG, activebackground=DISABLED_BG, fg="#999999")
+            else:
+                 # If hybrid, set color based on whether it's *checked*
+                 is_checked = ch1_override_var.get()
+                 if is_checked:
+                    ch1_override_checkbox.config(bg=USB_UNAVAILABLE_COLOR, activebackground=USB_UNAVAILABLE_ACTIVE_COLOR, fg=DARK_FG)
+                 else:
+                    ch1_override_checkbox.config(bg=DARK_BG, activebackground=DARK_BG, fg=DARK_FG)
+    # --- !! END NEW !! ---
+
     def _set_device_mode(new_mode_type, new_device, should_relaunch=False):
-        nonlocal MIDI_DEVICE, MODE_TYPE, user_declined_usb_switch, _usb_disconnect_warning_shown # Added: _usb_disconnect_warning_shown
+        nonlocal MIDI_DEVICE, MODE_TYPE, user_declined_usb_switch, _usb_disconnect_warning_shown
         global mode_label, _qc_midi_target_device # Access global mode_label and _qc_midi_target_device
 
         # 1. Update globals and config
         kill_receivemidi()
-        save_config(device=new_device)
-        
+        # Save config *before* potential relaunch
+        save_config(device=new_device, relaunch_on_monitor_fail=should_relaunch) # Pass relaunch flag here too
+
         # 2. Update runtime variables
         os.environ["MIDI_DEVICE"] = new_device
         os.environ["MODE_TYPE"] = new_mode_type
         MIDI_DEVICE = new_device
         MODE_TYPE = new_mode_type
-        
+
         # Reset the QC target device on mode switch. Monitor will update it shortly.
         _qc_midi_target_device = QUAD_CORTEX_DEVICE
-        
-        # Update the status label on the main GUI (REMOVED MIDI_DEVICE tag)
+
+        # Update the status label on the main GUI
         if mode_label and mode_label.winfo_exists():
              mode_label.config(text=f"Current Mode: {MODE_TYPE}")
 
         # Reset decline flag if switching to a USB mode
         if MODE_TYPE == "USB_DIRECT" or MODE_TYPE == "HYBRID":
             user_declined_usb_switch = False
-            _usb_disconnect_warning_shown = False # Reset on mode switch to allow warning if it fails again
-            
+            _usb_disconnect_warning_shown = False
+
+        # --- !! NEW: Update checkbox state after mode change !! ---
+        _update_override_checkbox_state()
+        # --- !! END NEW !! ---
+
         # 3. Handle re-launch if requested (used for monitor fail/failback)
         if should_relaunch:
-            save_config(relaunch_on_monitor_fail=True)
+            # save_config(relaunch_on_monitor_fail=True) # Already saved above
             new_env = os.environ.copy()
             # Preserve the MIDI_DEBUG_ENABLED state in the new environment
-            new_env["MIDI_DEBUG_ENABLED"] = os.environ.get("MIDI_DEBUG_ENABLED", "False") 
+            new_env["MIDI_DEBUG_ENABLED"] = os.environ.get("MIDI_DEBUG_ENABLED", "False")
             subprocess.Popen([sys.executable, SCRIPT_PATH], env=new_env)
             root.destroy()
             return
@@ -854,7 +915,7 @@ def launch_main_app():
         if device_switch_popup_instance and device_switch_popup_instance.winfo_exists():
             device_switch_popup_instance.lift()
             return
-        
+
         popup = tk.Toplevel(root)
         device_switch_popup_instance = popup
 
@@ -877,7 +938,7 @@ def launch_main_app():
         btn_frame.pack(pady=20)
 
         def switch_and_close(mode, device, current_popup):
-            _set_device_mode(mode, device)
+            _set_device_mode(mode, device) # This now handles saving the config
             current_popup.destroy()
 
         # --- Vertical Stacking of Device Buttons (Switch Popup) ---
@@ -894,6 +955,7 @@ def launch_main_app():
         btn_hybrid.pack(pady=5)
         # --- END Vertical Stacking ---
 
+
     def list_devices():
         nonlocal list_devices_popup_window_instance
 
@@ -902,7 +964,8 @@ def launch_main_app():
             return
 
         try:
-            result = subprocess.run([SENDMIDI_PATH, "list"], capture_output=True, text=True)
+             # --- !! ADDED creationflags=subprocess.CREATE_NO_WINDOW !! ---
+            result = subprocess.run([SENDMIDI_PATH, "list"], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             device_list = result.stdout.strip().splitlines()
         except Exception as e:
             print(f"Error listing devices: {e}")
@@ -951,14 +1014,14 @@ def launch_main_app():
 
             if device_name == USB_DIRECT_DEVICE:
                 mode_type = "USB_DIRECT"
-            elif device_name == HYBRID_DEVICE:
+            elif device_name == HYBRID_DEVICE: # Check HYBRID first if names are same
                 mode_type = "HYBRID"
-            elif device_name == DEFAULT_DEVICE:
+            elif device_name == DEFAULT_DEVICE: # BT
                 mode_type = "BT"
             elif device_name == QUAD_CORTEX_DEVICE:
                 actual_device_to_set = USB_DIRECT_DEVICE
                 mode_type = "USB_DIRECT"
-            
+
             if mode_type == "UNKNOWN":
                 mode_type = "CUSTOM_NO_RX"
 
@@ -982,7 +1045,7 @@ def launch_main_app():
                 state="disabled"
             )
             btn.pack(pady=5)
-    
+
     # --- GUI LAYOUT REVISION ---
 
     # 1. Status Frame (Device Monitor - TOP)
@@ -1024,22 +1087,48 @@ def launch_main_app():
                                    activeforeground=DARK_FG, bd=0, padx=6, pady=6, height=2)
     choose_setlist_btn.pack(side="left", padx=(5, 0))
 
-    # USB Lock Checkbox (New Position)
+    # --- !! NEW: Frame for stacked checkboxes !! ---
+    checkbox_frame = tk.Frame(controls_frame, bg=DARK_BG)
+    checkbox_frame.pack(side="left", padx=(5, 0), anchor="n")
+    # --- !! END NEW !! ---
+
+    # --- !! NEW: CH1 Override Checkbox (added to checkbox_frame) !! ---
+    def toggle_ch1_override():
+        """Called when the CH1 override checkbox is clicked."""
+        global ch1_override_var # Access global
+        new_state = ch1_override_var.get()
+        save_config(ch1_override_active=new_state)
+        print(f"CH1 Override {'enabled' if new_state else 'disabled'}.")
+        # Update color immediately
+        _update_override_checkbox_state()
+        # The monitor loop will also pick this up on its next cycle if needed
+
+    ch1_override_checkbox = tk.Checkbutton(
+        checkbox_frame, text="Force CH1 Reroute (Hybrid)", variable=ch1_override_var,
+        command=toggle_ch1_override, # Use the new handler function
+        bg=DARK_BG, fg=DARK_FG, selectcolor=DARK_BG,
+        activebackground=DARK_BG, activeforeground=DARK_FG,
+        font=narrow_font_plain, relief="raised", bd=2
+    )
+    ch1_override_checkbox.pack(side="top", anchor="w") # Pack to top
+    # --- !! END NEW !! ---
+
+    # USB Lock Checkbox (Moved to checkbox_frame, packed below)
     usb_lock_checkbox = tk.Checkbutton(
-        controls_frame, 
-        text="Lock USB/Autoswitch", 
-        variable=usb_lock_var, 
+        checkbox_frame,
+        text="Lock USB/Autoswitch",
+        variable=usb_lock_var,
         command=lambda: save_config(usb_lock_active=usb_lock_var.get()),
-        bg=DARK_BG, 
+        bg=DARK_BG,
         fg=DARK_FG,
-        selectcolor=DARK_BG, 
+        selectcolor=DARK_BG,
         activebackground=DARK_BG,
         activeforeground=DARK_FG,
         font=narrow_font_plain,
-        relief="raised", 
-        bd=2 
+        relief="raised",
+        bd=2
     )
-    usb_lock_checkbox.pack(side="left", padx=(5, 0))
+    usb_lock_checkbox.pack(side="top", anchor="w", pady=(5,0)) # Pack below override
 
     # --- End GUI LAYOUT REVISION ---
 
@@ -1085,13 +1174,18 @@ def launch_main_app():
                 return
             last_press_time = now
 
-            if last_selected_button and last_selected_button != current_btn:
-                last_selected_button.config(bg=BUTTON_BG)
-            current_btn.config(bg=HIGHLIGHT_BG)
+            if last_selected_button and last_selected_button.winfo_exists() and last_selected_button != current_btn:
+                 try: last_selected_button.config(bg=BUTTON_BG)
+                 except tk.TclError: pass # Ignore if widget destroyed
+            if current_btn.winfo_exists():
+                 try: current_btn.config(bg=HIGHLIGHT_BG)
+                 except tk.TclError: pass
             last_selected_button = current_btn
 
             for b in all_buttons:
-                b.config(state="disabled")
+                 if b.winfo_exists():
+                     try: b.config(state="disabled")
+                     except tk.TclError: pass
 
             # Kill any existing receivemidi process BEFORE starting new sequence
             kill_receivemidi()
@@ -1109,7 +1203,7 @@ def launch_main_app():
             # Only special routing when targeting MC8 (USB Direct or Hybrid)
             if MIDI_DEVICE == USB_DIRECT_DEVICE or MIDI_DEVICE == HYBRID_DEVICE:
                 for cmd in all_commands_for_this_patch:
-                    # A command goes into commands_ch1_before_receivemidi if it's a channel 1 command 
+                    # A command goes into commands_ch1_before_receivemidi if it's a channel 1 command
                     # AND we are in USB_DIRECT mode (where Quad Cortex is the target) and it's a PC command
                     if MODE_TYPE == "USB_DIRECT" and len(cmd) > 1 and cmd[0] == "ch" and cmd[1] == "1" and cmd[2] == "pc":
                         commands_ch1_before_receivemidi.append(cmd)
@@ -1124,44 +1218,75 @@ def launch_main_app():
 
             # --- Function to run in a separate thread for MIDI sending and delays ---
             def _send_patch_commands_in_thread():
-                # 1. Send commands that must go to Channel 1 (QC) BEFORE receivemidi starts (only relevant for USB_DIRECT).
-                for cmd in commands_ch1_before_receivemidi:
-                    send_midi([cmd])
-                if commands_ch1_before_receivemidi:
-                    time.sleep(0.05)
+                root_exists = root and root.winfo_exists() # Check if root still exists before using after()
+                try:
+                    # 1. Send commands that must go to Channel 1 (QC) BEFORE receivemidi starts (only relevant for USB_DIRECT).
+                    for cmd in commands_ch1_before_receivemidi:
+                        send_midi([cmd])
+                    if commands_ch1_before_receivemidi:
+                        time.sleep(0.05)
 
-                # 2. Launch receivemidi ONLY if in USB_DIRECT mode.
-                _launch_receivemidi_if_usb_direct() # This function internally checks for MODE_TYPE == "USB_DIRECT"
+                    # 2. Launch receivemidi ONLY if in USB_DIRECT mode.
+                    _launch_receivemidi_if_usb_direct() # This function internally checks for MODE_TYPE == "USB_DIRECT"
 
-                # 3. Add 1-second delay after potential receivemidi launches
-                time.sleep(1)
+                    # 3. Add 1-second delay after potential receivemidi launches
+                    time.sleep(1)
 
-                # 4. Send the remaining commands
-                if label == "TEST 123":
-                    def create_and_place_toast():
-                        nonlocal testing_toast_label
-                        if testing_toast_label and testing_toast_label.winfo_exists():
-                            testing_toast_label.destroy()
-                        testing_toast_label = tk.Label(root, text="TESTING", bg="red", fg="white", font=big_font)
-                        testing_toast_label.place(relx=0.5, rely=0.1, anchor="n")
+                    # 4. Send the remaining commands
+                    if label == "TEST 123":
+                        def create_and_place_toast():
+                            nonlocal testing_toast_label
+                            if root_exists: # Check again inside the after() call
+                                if testing_toast_label and testing_toast_label.winfo_exists():
+                                    testing_toast_label.destroy()
+                                testing_toast_label = tk.Label(root, text="TESTING", bg="red", fg="white", font=big_font)
+                                testing_toast_label.place(relx=0.5, rely=0.1, anchor="n")
+                                testing_toast_label.lift() # Bring toast to front
 
-                    root.after(0, create_and_place_toast)
+                        if root_exists: root.after(0, create_and_place_toast)
 
-                    for i, command in enumerate(commands_after_receivemidi_start):
-                        send_midi([command])
-                        if i < len(commands_after_receivemidi_start) - 1:
-                            time.sleep(0.25)
+                        for i, command in enumerate(commands_after_receivemidi_start):
+                            send_midi([command])
+                            if i < len(commands_after_receivemidi_start) - 1:
+                                time.sleep(0.25)
 
-                    root.after(0, lambda: [b.config(state="normal") for b in all_buttons])
-                    root.after(0,
-                               lambda: testing_toast_label.destroy() if testing_toast_label and testing_toast_label.winfo_exists() else None)
+                        def final_actions_test():
+                             if root_exists: # Check again
+                                for b in all_buttons:
+                                    if b.winfo_exists():
+                                        try: b.config(state="normal")
+                                        except tk.TclError: pass
+                                if testing_toast_label and testing_toast_label.winfo_exists():
+                                    testing_toast_label.destroy()
 
-                else:
-                    for i, command in enumerate(commands_after_receivemidi_start):
-                        send_midi([command])
-                        if i < len(commands_after_receivemidi_start) - 1:
-                            time.sleep(0.25)
-                    root.after(0, lambda: [b.config(state="normal") for b in all_buttons])
+                        if root_exists: root.after(0, final_actions_test)
+
+
+                    else:
+                        for i, command in enumerate(commands_after_receivemidi_start):
+                            send_midi([command])
+                            if i < len(commands_after_receivemidi_start) - 1:
+                                time.sleep(0.25)
+
+                        def final_actions_normal():
+                            if root_exists: # Check again
+                                for b in all_buttons:
+                                    if b.winfo_exists():
+                                         try: b.config(state="normal")
+                                         except tk.TclError: pass
+                        if root_exists: root.after(0, final_actions_normal)
+
+                except Exception as send_err:
+                     print(f"Error in MIDI send thread: {send_err}")
+                     # Attempt to re-enable buttons even on error
+                     def final_actions_error():
+                          if root_exists: # Check again
+                            for b in all_buttons:
+                                if b.winfo_exists():
+                                    try: b.config(state="normal")
+                                    except tk.TclError: pass
+                     if root_exists: root.after(0, final_actions_error)
+
 
             midi_send_thread = threading.Thread(target=_send_patch_commands_in_thread)
             midi_send_thread.daemon = True
@@ -1229,11 +1354,30 @@ def launch_main_app():
             except json.JSONDecodeError:
                 config = {}
 
-    if "csv_file_used" in config and os.path.exists(config["csv_file_used"]):
-        CSV_FILE = config["csv_file_used"]
+    # Determine the correct CSV file to load based on config
+    csv_path_from_config = config.get("csv_file_used")
+    if csv_path_from_config and os.path.exists(csv_path_from_config):
+        # If the saved path points to the generated setlist CSV, copy it to the working file
+        if os.path.basename(csv_path_from_config) == "MidiList_Set.csv":
+             shutil.copyfile(csv_path_from_config, CSV_FILE)
+        # If the saved path points to the default source, copy that to the working file
+        elif os.path.abspath(csv_path_from_config) == os.path.abspath(CSV_FILE_DEFAULT_SOURCE):
+             shutil.copyfile(csv_path_from_config, CSV_FILE)
+        # Otherwise, assume the saved path *is* the working file (MidiList.csv) - no copy needed
+        # Or if the saved path is invalid, we'll just use the existing MidiList.csv
+    else:
+         # If no config or path invalid, ensure MidiList.csv exists, copying default if necessary
+         if not os.path.exists(CSV_FILE) and os.path.exists(CSV_FILE_DEFAULT_SOURCE):
+              shutil.copyfile(CSV_FILE_DEFAULT_SOURCE, CSV_FILE)
+              save_config(csv_file_used=CSV_FILE_DEFAULT_SOURCE, current_setlist_display_name="Default Songs") # Update config
 
+    # Now load patches from the potentially updated CSV_FILE
     _load_and_display_patches()
-    
+
+    # --- !! NEW: Call checkbox update after GUI created !! ---
+    _update_override_checkbox_state()
+    # --- !! END NEW !! ---
+
     # Initial launch of receivemidi if in USB_DIRECT mode, when the main app starts
     _launch_receivemidi_if_usb_direct()
     # --- End of initial load ---
@@ -1253,15 +1397,15 @@ def launch_main_app():
 
     def _create_device_popup(title, message, ack_text, decline_text, is_failback):
         nonlocal device_change_popup_instance, user_declined_usb_switch
-        
+
         # Prevent multiple popups
         if device_change_popup_instance and device_change_popup_instance.winfo_exists():
             return
-        
+
         popup = tk.Toplevel(root)
         popup.title(title)
         popup.configure(bg=DARK_BG)
-        
+
         popup_width = 800
         popup_height = 400
         screen_width = root.winfo_screenwidth()
@@ -1270,8 +1414,12 @@ def launch_main_app():
         y_pos = (screen_height // 2) - (popup_height // 2)
         popup.geometry(f"{popup_width}x{popup_height}+{x_pos}+{y_pos}")
 
-        popup.grab_set()
-        popup.transient(root)
+        try: # Try grab/transient, but don't fail if root isn't ready
+            popup.grab_set()
+            popup.transient(root)
+        except tk.TclError:
+            print("Warning: Could not set grab/transient on device popup.")
+
         device_change_popup_instance = popup
 
         tk.Label(popup, text=title.replace("!", ""), font=("Arial", 24, "bold"),
@@ -1284,26 +1432,39 @@ def launch_main_app():
             switch_choice[0] = True
             if is_failback:
                 user_declined_usb_switch = False
-            popup.destroy()
+            if popup.winfo_exists(): popup.destroy() # Check existence before destroy
 
         def on_decline_clicked():
             switch_choice[0] = False
             if is_failback:
                 user_declined_usb_switch = True
-            popup.destroy()
-            
+            if popup.winfo_exists(): popup.destroy()
+
+        # --- Handle popup close via 'X' button ---
+        def handle_close():
+             nonlocal device_change_popup_instance
+             if decline_text: # If there's a decline option, closing = decline
+                 on_decline_clicked()
+             else: # Otherwise, closing = acknowledge
+                 on_ack_clicked()
+             device_change_popup_instance = None # Reset instance here too
+
+        popup.protocol("WM_DELETE_WINDOW", handle_close)
+        # --- End close handler ---
+
+
         btn_frame_popup = tk.Frame(popup, bg=DARK_BG)
         btn_frame_popup.pack(pady=20)
-        
+
         ack_button = tk.Button(btn_frame_popup, text=ack_text, font=("Arial", 16),
-                               command=on_ack_clicked, bg=("#b02f2f" if not is_failback else "#2a8f44"), 
-                               fg="white", activebackground=("#902020" if not is_failback else "#207030"), 
+                               command=on_ack_clicked, bg=("#b02f2f" if not is_failback else "#2a8f44"),
+                               fg="white", activebackground=("#902020" if not is_failback else "#207030"),
                                activeforeground="white", width=30, height=2)
         ack_button.pack(side="left", padx=10)
-        
+
         if decline_text:
             decline_button = tk.Button(btn_frame_popup, text=decline_text, font=("Arial", 16),
-                                       command=on_decline_clicked, bg=("#28578f" if is_failback else "#444444"), 
+                                       command=on_decline_clicked, bg=("#28578f" if is_failback else "#444444"),
                                        fg="white", activebackground=BUTTON_HL, activeforeground="white",
                                        width=30, height=2)
             decline_button.pack(side="right", padx=10)
@@ -1314,29 +1475,43 @@ def launch_main_app():
         device_change_popup_instance = None # Reset instance
         return switch_choice[0]
 
-    def monitor_midi_device(): # Removed usb_lock_checkbox from args, accessing it as global
+    def monitor_midi_device():
         nonlocal MIDI_DEVICE, MODE_TYPE, usb_stable_start_time, user_declined_usb_switch, _usb_disconnect_warning_shown
-        global mode_label, usb_lock_checkbox, _qc_midi_target_device # Access global routing variable
+        global mode_label, usb_lock_checkbox, _qc_midi_target_device, ch1_override_checkbox, ch1_override_var # Access globals
+
+        if not root or not root.winfo_exists(): # Check if root window still exists
+             print("Monitor: Root window destroyed, stopping monitor.")
+             return
 
         try:
-            result = subprocess.run([SENDMIDI_PATH, "list"], capture_output=True, text=True)
+            # --- !! ADDED creationflags=subprocess.CREATE_NO_WINDOW !! ---
+            result = subprocess.run([SENDMIDI_PATH, "list"], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             devices = result.stdout.strip().splitlines()
 
             morningstar_present = USB_DIRECT_DEVICE in devices or HYBRID_DEVICE in devices
             quad_cortex_present = QUAD_CORTEX_DEVICE in devices
-            
+
             # Simplified check for USB availability: both critical devices must be visible for a "Full USB" state
             usb_devices_present = morningstar_present and quad_cortex_present
-            
+
+            # --- !! NEW: Get CH1 override state from GUI variable !! ---
+            ch1_override_on = ch1_override_var.get() if ch1_override_var else False
+            # --- !! END NEW !! ---
+
             # --- HYBRID MODE REROUTING LOGIC ---
             if MODE_TYPE == "HYBRID":
-                if not quad_cortex_present:
-                    # QC is missing, REROUTE QC messages (Ch 1) to MC8 (Hybrid Device)
-                    _qc_midi_target_device = HYBRID_DEVICE 
-                    # Use a slightly modified text for the status label
-                    mode_label_text = f"Current Mode: {MODE_TYPE} (QC REROUTED to MC8)"
+                # --- !! MODIFIED: Added ch1_override_on check !! ---
+                if ch1_override_on or not quad_cortex_present:
+                    # REROUTE QC messages (Ch 1) to MC8 (Hybrid Device)
+                    _qc_midi_target_device = HYBRID_DEVICE
+                    # Update label text based on *why* it's rerouted
+                    if ch1_override_on:
+                        mode_label_text = f"Current Mode: {MODE_TYPE} (QC OVERRIDE to MC8)"
+                    else:
+                        mode_label_text = f"Current Mode: {MODE_TYPE} (QC REROUTED to MC8)"
+                # --- !! END MODIFICATION !! ---
                 else:
-                    # QC is present, send QC messages (Ch 1) directly to QC device
+                    # Use QC (Ch 1) directly if present and not overridden
                     _qc_midi_target_device = QUAD_CORTEX_DEVICE
                     mode_label_text = f"Current Mode: {MODE_TYPE} (QC DIRECT)"
             else:
@@ -1344,10 +1519,10 @@ def launch_main_app():
                 _qc_midi_target_device = QUAD_CORTEX_DEVICE
                 mode_label_text = f"Current Mode: {MODE_TYPE}"
             # --- END HYBRID MODE REROUTING LOGIC ---
-            
+
             # --- STATUS LABEL AND CHECKBOX COLORING LOGIC ---
             if mode_label and mode_label.winfo_exists() and usb_lock_checkbox and usb_lock_checkbox.winfo_exists():
-                
+
                 # REVISED: Use mode_label_text for status text
                 if MODE_TYPE == "USB_DIRECT" or MODE_TYPE == "HYBRID":
                     if not usb_devices_present:
@@ -1356,9 +1531,9 @@ def launch_main_app():
                         usb_lock_checkbox.config(bg=USB_UNAVAILABLE_COLOR, activebackground=USB_UNAVAILABLE_ACTIVE_COLOR)
                     else:
                         # USB Mode, Connected: GREEN status and checkbox
-                        mode_label.config(text=f"{mode_label_text}", fg=USB_AVAILABLE_COLOR) 
-                        usb_lock_checkbox.config(bg=USB_AVAILABLE_COLOR, activebackground=USB_AVAILABLE_ACTIVE_COLOR) 
-                
+                        mode_label.config(text=f"{mode_label_text}", fg=USB_AVAILABLE_COLOR)
+                        usb_lock_checkbox.config(bg=USB_AVAILABLE_COLOR, activebackground=USB_AVAILABLE_ACTIVE_COLOR)
+
                 elif MODE_TYPE == "BT":
                     if usb_devices_present:
                         # BT Mode, USB Available: GREEN status and checkbox
@@ -1368,58 +1543,78 @@ def launch_main_app():
                         # BT Mode, USB Unavailable: Default status and checkbox
                         mode_label.config(text=f"{mode_label_text}", fg=DARK_FG)
                         usb_lock_checkbox.config(bg=DARK_BG, activebackground=DARK_BG)
-            
+
+            # --- !! NEW: Update CH1 Override checkbox color/state !! ---
+            _update_override_checkbox_state()
+            # --- !! END NEW !! ---
+
             # --- END STATUS LABEL AND CHECKBOX COLORING LOGIC ---
 
+
             # --- Failover Logic (from USB Direct/Hybrid to BT) ---
-            if MODE_TYPE == "USB_DIRECT" or MODE_TYPE == "HYBRID":
+            # --- !! MODIFIED: Changed failover condition check !! ---
+            trigger_failover = False
+            if MODE_TYPE == "USB_DIRECT":
+                # In USB_DIRECT mode, failover if *either* device is missing
                 if not usb_devices_present:
-                    
-                    if usb_lock_var.get():
-                        # LOCK IS ACTIVE: Prevent forced switch to BT.
-                        # LOGIC ADDED: Only show toast if the warning hasn't been shown yet
-                        if not _usb_disconnect_warning_shown:
-                            show_toast(f"USB disconnected! Switch to BT prevented by lock.", bg="red", duration=5000)
-                            _usb_disconnect_warning_shown = True # Set flag after showing
-                        # No 'return' here, so monitoring will reschedule at the end.
-                        
-                    else:
-                        # LOCK IS INACTIVE: Proceed with switch to BT
-                        user_declined_usb_switch = False
-                        _usb_disconnect_warning_shown = False # RESET FLAG before switching
-                        kill_receivemidi()
+                    trigger_failover = True
+            elif MODE_TYPE == "HYBRID":
+                # In HYBRID mode, failover *only* if the main CH2 device (MC8) is missing
+                if not morningstar_present:
+                    trigger_failover = True
+            # No failover trigger needed for BT mode
+            # --- !! END MODIFICATION !! ---
 
-                        message = "USB Device failed! Check MIDIberry settings. Defaulting to BLUETOOTH connection\n(power on rack WIDI jack first)."
-                        _create_device_popup("USB Device Disconnected!", message, "OK", None, False)
+            if trigger_failover: # Check the flag
 
-                        # --- After popup is dismissed, proceed with re-launch ---
-                        _set_device_mode("BT", DEFAULT_DEVICE, should_relaunch=True)
-                        return # Exit function as a new instance is launched
+                if usb_lock_var.get():
+                    # LOCK IS ACTIVE: Prevent forced switch to BT.
+                    if not _usb_disconnect_warning_shown:
+                         # --- !! MODIFIED: More specific message !! ---
+                         msg = "USB Device(s) disconnected! Switch to BT prevented by lock." \
+                               if MODE_TYPE == "USB_DIRECT" else \
+                               f"{HYBRID_DEVICE} disconnected! Switch to BT prevented by lock."
+                         show_toast(msg, bg="red", duration=5000)
+                         # --- !! END MODIFICATION !! ---
+                         _usb_disconnect_warning_shown = True # Set flag after showing
+                    # No 'return' here, so monitoring will reschedule at the end.
 
                 else:
-                    # USB devices ARE present while in USB_DIRECT/HYBRID mode
-                    _usb_disconnect_warning_shown = False # RESET FLAG when USB is reconnected
+                    # LOCK IS INACTIVE: Proceed with switch to BT
+                    user_declined_usb_switch = False
+                    _usb_disconnect_warning_shown = False # RESET FLAG before switching
+                    kill_receivemidi()
+
+                    # Simplified: Just show a toast and relaunch
+                    show_toast("USB Disconnected! Failing over to Bluetooth...", bg="red", duration=4000)
+
+                    # --- After popup is dismissed, proceed with re-launch ---
+                    _set_device_mode("BT", DEFAULT_DEVICE, should_relaunch=True)
+                    return # Exit function as a new instance is launched
+
+                # USB devices ARE present while in USB_DIRECT/HYBRID mode
+                _usb_disconnect_warning_shown = False # RESET FLAG when USB is reconnected
 
             # --- Failback Logic (from BT to USB Direct) ---
             elif MODE_TYPE == "BT":
-                if usb_devices_present:
+                if usb_devices_present: # Only check if BOTH devices are present
                     if usb_stable_start_time is None:
                         usb_stable_start_time = time.time()
-                        show_toast("USB devices detected. Checking for stability...", duration=3000)
+                        show_toast("USB devices detected. Checking for stability...", duration=3000, bg="#303030") # Use neutral color
                     elif (time.time() - usb_stable_start_time) >= 10:
                         usb_stable_start_time = None
 
                         if usb_lock_var.get() or user_declined_usb_switch:
-                            show_toast("USB devices available, but switch declined/locked.")
+                            show_toast("USB devices available, but switch declined/locked.", bg="#303030") # Use neutral color
                         else:
                             message = "Both Morningstar MC8 Pro and Quad Cortex MIDI Control\nhave reconnected via USB. Do you want to switch back to USB Direct mode?"
-                            choice = _create_device_popup("USB Devices Reconnected!", message, 
+                            choice = _create_device_popup("USB Devices Reconnected!", message,
                                                            "Acknowledge & Switch to USB Direct", "No, stay on Bluetooth", True)
 
                             if choice == True:
                                 # Switch to USB Direct, which uses receivemidi
                                 _set_device_mode("USB_DIRECT", USB_DIRECT_DEVICE, should_relaunch=True)
-                                return
+                                return # Exit function as relaunch pending
                             # If choice is False, user_declined_usb_switch is set to True inside the popup logic
 
                 else:
@@ -1428,10 +1623,11 @@ def launch_main_app():
                     user_declined_usb_switch = False
 
         except Exception as e:
-            show_toast(f"Device check failed: {e}")
-            
+            show_toast(f"Device check failed: {e}", bg="red") # Show errors in red
+
         # Always re-schedule the monitor function unless a re-launch occurred
-        root.after(5000, monitor_midi_device)
+        if root and root.winfo_exists(): # Check root again before scheduling
+            root.after(5000, monitor_midi_device)
 
     monitor_midi_device()
     root.mainloop()
