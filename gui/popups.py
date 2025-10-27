@@ -25,9 +25,235 @@ def write_log(message):
         print(f"POPUP LOG FAIL: {e}. Message: {message}")
 # --- !! END DEBUG LOGGING !! ---
 
+# --- !! HELPER: GET DEVICE LIST !! ---
+def _get_device_list():
+    """Internal helper to get MIDI devices."""
+    try:
+        # Use CREATE_NO_WINDOW to prevent flash
+        result = subprocess.run([config.SENDMIDI_PATH, "list"], capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        device_list = result.stdout.strip().splitlines()
+        # Filter out common junk devices
+        filtered_list = [dev for dev in device_list if "Microsoft GS" not in dev and "MIDIOUT" not in dev]
+        return filtered_list
+    except Exception as e:
+        write_log(f"Error listing devices in _get_device_list: {e}")
+        return ["Error: sendmidi not found"]
+
+# --- !! NEW DEVICE VERIFICATION POPUP !! ---
+def show_device_verification(root):
+    """
+    Shows a popup to verify current MIDI device settings on every launch.
+    Allows user to accept or proceed to change settings.
+    """
+    write_log("show_device_verification() called.")
+    try:
+        popup = tk.Toplevel(root)
+        popup.title("Verify MIDI Devices")
+        popup.configure(bg=config.DARK_BG)
+
+        win_width = 600
+        win_height = 350 # Adjusted height
+        popup.update_idletasks()
+        screen_width = popup.winfo_screenwidth()
+        screen_height = popup.winfo_screenheight()
+        x = (screen_width // 2) - (win_width // 2)
+        y = (screen_height // 2) - (win_height // 2)
+        popup.geometry(f"{win_width}x{win_height}+{x}+{y}")
+        write_log("Popup geometry set.")
+
+        # --- !! Skip grab/transient as root is hidden !! ---
+        # popup.grab_set()
+        # popup.transient(root)
+        write_log("Skipping grab_set() and transient().")
+        # --- !! End Skip !! ---
+
+        # Load current settings from config module (which main.py loaded)
+        current_ch1 = config.DEVICE_NAME_CH1 if config.DEVICE_NAME_CH1 else "Not Set"
+        current_ch2 = config.DEVICE_NAME_CH2 if config.DEVICE_NAME_CH2 else "Not Set"
+        current_bt = config.DEVICE_NAME_BT if config.DEVICE_NAME_BT else "Not Set"
+
+        # --- Widgets ---
+        tk.Label(popup, text="Current MIDI Device Settings:",
+                 font=config.big_font, bg=config.DARK_BG, fg=config.DARK_FG).pack(pady=20)
+
+        info_frame = tk.Frame(popup, bg=config.DARK_BG)
+        info_frame.pack(pady=10, padx=30, fill="x")
+
+        tk.Label(info_frame, text=f"CH1 (e.g., QC):  {current_ch1}",
+                 font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG, justify="left").pack(anchor="w", pady=3)
+        tk.Label(info_frame, text=f"CH2/USB (e.g., MC8):  {current_ch2}",
+                 font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG, justify="left").pack(anchor="w", pady=3)
+        tk.Label(info_frame, text=f"Bluetooth (e.g., loopMIDI):  {current_bt}",
+                 font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG, justify="left").pack(anchor="w", pady=3)
+
+        button_frame = tk.Frame(popup, bg=config.DARK_BG)
+        button_frame.pack(pady=30)
+
+        def on_ok():
+            write_log("User accepted current device settings.")
+            popup.destroy()
+
+        def on_change():
+            write_log("User chose to change device settings.")
+            popup.destroy() # Close this verification popup first
+            write_log("Calling show_initial_device_setup()...")
+            show_initial_device_setup(root) # Now open the full setup
+            write_log("Returned from show_initial_device_setup().")
+
+
+        ok_button = tk.Button(button_frame, text="OK (Use These)", font=("Arial", 14),
+                              bg="#2a8f44", fg="white", command=on_ok, width=15)
+        ok_button.grid(row=0, column=0, padx=15)
+
+        change_button = tk.Button(button_frame, text="Change Devices", font=("Arial", 14),
+                                  bg="#b02f2f", fg="white", command=on_change, width=15)
+        change_button.grid(row=0, column=1, padx=15)
+
+        write_log("Calling root.wait_window(popup) for verification... (Window should be visible NOW)")
+        root.wait_window(popup)
+        write_log("root.wait_window(popup) for verification has finished.")
+
+    except Exception as e:
+        write_log(f"--- CRASH in show_device_verification ---")
+        write_log(traceback.format_exc())
+        if popup and popup.winfo_exists():
+            popup.destroy()
+
+# --- !! END NEW POPUP !! ---
+
+
+# --- DEVICE SETUP POPUP (Modified slightly for clarity/robustness) ---
+def show_initial_device_setup(root):
+    """
+    Shows the setup popup to select MIDI device names.
+    Can be called on first launch OR when user clicks 'Change Devices'.
+    """
+    write_log("show_initial_device_setup() called.")
+    try:
+        popup = tk.Toplevel(root)
+        popup.title("MIDI Device Setup") # Changed title slightly
+        popup.configure(bg=config.DARK_BG)
+
+        win_width = 700
+        win_height = 450
+        popup.update_idletasks()
+        screen_width = popup.winfo_screenwidth()
+        screen_height = popup.winfo_screenheight()
+        x = (screen_width // 2) - (win_width // 2)
+        y = (screen_height // 2) - (win_height // 2)
+        popup.geometry(f"{win_width}x{win_height}+{x}+{y}")
+        write_log("Popup geometry set.")
+
+        # --- !! FIX: Comment out grab_set and transient AGAIN !! ---
+        # These cause problems when root is hidden, even if called after another popup.
+        # popup.grab_set()
+        # popup.transient(root)
+        write_log("Skipping grab_set() and transient() to prevent potential crash.")
+        # --- !! END FIX !! ---
+
+        # Get the list of actual MIDI devices
+        available_devices = _get_device_list()
+        if not available_devices:
+            available_devices = ["No Devices Found"]
+
+        # Variables
+        ch1_device_var = tk.StringVar(popup)
+        ch2_device_var = tk.StringVar(popup)
+        bt_device_var = tk.StringVar(popup)
+
+        # --- Set defaults based on CURRENT config, not hardcoded ---
+        current_ch1 = config.DEVICE_NAME_CH1
+        current_ch2 = config.DEVICE_NAME_CH2
+        current_bt = config.DEVICE_NAME_BT
+
+        if current_ch1 and current_ch1 in available_devices:
+            ch1_device_var.set(current_ch1)
+        elif "Quad Cortex MIDI Control" in available_devices: # Fallback guess
+             ch1_device_var.set("Quad Cortex MIDI Control")
+        else:
+            ch1_device_var.set(available_devices[0])
+
+        if current_ch2 and current_ch2 in available_devices:
+            ch2_device_var.set(current_ch2)
+        elif "Morningstar MC8 Pro" in available_devices: # Fallback guess
+            ch2_device_var.set("Morningstar MC8 Pro")
+        else:
+            ch2_device_var.set(available_devices[0])
+
+        if current_bt and current_bt in available_devices:
+            bt_device_var.set(current_bt)
+        elif "loopMIDI Port" in available_devices: # Fallback guess
+            bt_device_var.set("loopMIDI Port")
+        else:
+            bt_device_var.set(available_devices[0])
+        # --- End Defaults Update ---
+
+
+        # --- Widgets ---
+        tk.Label(popup, text="Please map your MIDI devices:", # Changed text slightly
+                 font=config.big_font, bg=config.DARK_BG, fg=config.DARK_FG).pack(pady=20)
+
+        main_frame = tk.Frame(popup, bg=config.DARK_BG)
+        main_frame.pack(pady=10, padx=20, fill="x")
+
+        # --- CH1 (Quad Cortex) ---
+        tk.Label(main_frame, text="CH1 Device (e.g., Quad Cortex):",
+                 font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG).pack(anchor="w")
+        ch1_menu = tk.OptionMenu(main_frame, ch1_device_var, *available_devices)
+        ch1_menu.config(font=config.narrow_font_plain, width=60)
+        ch1_menu.pack(fill="x", pady=(5, 15))
+
+        # --- CH2 (Morningstar MC8) ---
+        tk.Label(main_frame, text="CH2 / USB Device (e.g., Morningstar MC8):",
+                 font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG).pack(anchor="w")
+        ch2_menu = tk.OptionMenu(main_frame, ch2_device_var, *available_devices)
+        ch2_menu.config(font=config.narrow_font_plain, width=60)
+        ch2_menu.pack(fill="x", pady=(5, 15))
+
+        # --- BT (loopMIDI) ---
+        tk.Label(main_frame, text="Bluetooth Device (e.g., loopMIDI Port):",
+                 font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG).pack(anchor="w")
+        bt_menu = tk.OptionMenu(main_frame, bt_device_var, *available_devices)
+        bt_menu.config(font=config.narrow_font_plain, width=60)
+        bt_menu.pack(fill="x", pady=(5, 15))
+
+        def on_save():
+            write_log("Saving selected device setup...")
+            new_ch1 = ch1_device_var.get()
+            new_ch2 = ch2_device_var.get()
+            new_bt = bt_device_var.get()
+            config.save_config(
+                DEVICE_NAME_CH1=new_ch1,
+                DEVICE_NAME_CH2=new_ch2,
+                DEVICE_NAME_BT=new_bt
+            )
+            # --- !! Reload names in config module immediately !! ---
+            config.DEVICE_NAME_CH1 = new_ch1
+            config.DEVICE_NAME_CH2 = new_ch2
+            config.DEVICE_NAME_BT = new_bt
+            # --- !! End Reload !! ---
+            write_log("Save complete. Destroying setup popup.")
+            popup.destroy()
+
+        save_button = tk.Button(popup, text="Save and Continue", font=("Arial", 16),
+                                bg="#2a8f44", fg="white", command=on_save)
+        save_button.pack(pady=20)
+
+        write_log("Calling root.wait_window(popup) for device setup... (Window should be visible NOW)")
+        root.wait_window(popup)
+        write_log("root.wait_window(popup) for device setup has finished.")
+
+    except Exception as e:
+        write_log(f"--- CRASH in show_initial_device_setup ---")
+        write_log(traceback.format_exc())
+        if popup and popup.winfo_exists():
+            popup.destroy()
+
+# --- END DEVICE SETUP POPUP ---
+
 
 # --- SETLIST CHOOSER (Top Level) ---
-
+# (Unchanged)
 def show_setlist_chooser(root):
     write_log("show_setlist_chooser() called.")
     try:
@@ -58,16 +284,8 @@ def show_setlist_chooser(root):
         popup.geometry(f"{win_width}x{win_height}+{x}+{y}")
         
         write_log("Popup geometry set.")
-        
-        # --- !! CRASH FIX !! ---
-        # The combination of a withdrawn root, Toplevel, and grab_set()
-        # causes a fatal crash on some systems. Removing them.
-        # popup.grab_set() 
-        # popup.transient(root)
         write_log("Skipping grab_set() and transient() to prevent crash.")
-        # --- !! END FIX !! ---
 
-        # --- Nested functions ---
         def launch_with(file_path_for_csv, display_name):
             write_log(f"launch_with() called. Path: {file_path_for_csv}, Name: {display_name}")
             temp_path = config.CSV_FILE_DEFAULT
@@ -90,7 +308,6 @@ def show_setlist_chooser(root):
             popup.destroy()
             write_log("Calling _show_setlist_file_picker().")
             _show_setlist_file_picker(root)
-        # --- End Nested functions ---
 
         write_log("Creating widgets for setlist chooser...")
         tk.Label(popup, text="Load Setlist or Default Songs?", font=config.big_font, bg=config.DARK_BG, fg=config.DARK_FG).pack(pady=20)
@@ -103,21 +320,17 @@ def show_setlist_chooser(root):
         write_log("Widgets created.")
 
         write_log("Calling root.wait_window(popup)... (Window should be visible NOW)")
-        root.wait_window(popup) # This will still work and pause main.py
+        root.wait_window(popup) 
         write_log("root.wait_window(popup) has finished.")
 
     except Exception as e:
         write_log(f"--- CRASH in show_setlist_chooser ---")
         write_log(traceback.format_exc())
-        # --- !! BUG FIX !! ---
-        # Only destroy the popup that failed, not the main root window.
         if popup and popup.winfo_exists():
             popup.destroy()
-        # --- !! END FIX !! ---
-
 
 # --- SETLIST FILE PICKER (Second Level) ---
-
+# (Unchanged)
 def _show_setlist_file_picker(root):
     write_log("_show_setlist_file_picker() called.")
     try:
@@ -138,11 +351,7 @@ def _show_setlist_file_picker(root):
         write_log(f"Screen dims: {screen_width}x{screen_height}. Window pos: +{x_offset}+{y_offset}")
         popup.geometry(f"{win_width}x{win_height}+{x_offset}+{y_offset}")
         
-        # --- !! CRASH FIX !! ---
-        # popup.grab_set()
-        # popup.transient(root)
         write_log("Skipping grab_set() and transient() to prevent crash.")
-        # --- !! END FIX !! ---
         
         write_log("Setlist picker popup created and configured.")
 
@@ -231,31 +440,33 @@ def _show_setlist_file_picker(root):
             popup.destroy()
 
 
-# --- DEVICE CHOOSER ---
-
+# --- DEVICE CHOOSER (Mode Selection) ---
+# (Unchanged)
 def show_device_chooser(root):
     write_log("show_device_chooser() called.")
     try:
         conf = config.load_config()
         write_log("Config loaded.")
-        
+
         if conf.get("relaunch_on_monitor_fail"):
             write_log("Relaunch on fail detected. Skipping device prompt.")
-            device = conf.get("device", config.DEFAULT_DEVICE)
+            device = conf.get("device", config.DEVICE_NAME_BT)
             os.environ["MIDI_DEVICE"] = device
-            
-            if device == config.USB_DIRECT_DEVICE: os.environ["MODE_TYPE"] = "USB_DIRECT"
-            elif device == config.HYBRID_DEVICE: os.environ["MODE_TYPE"] = "HYBRID"
-            elif device == config.DEFAULT_DEVICE: os.environ["MODE_TYPE"] = "BT"
-            else: os.environ["MODE_TYPE"] = "CUSTOM_NO_RX"
+
+            if device == config.DEVICE_NAME_CH2:
+                os.environ["MODE_TYPE"] = "USB_DIRECT"
+            elif device == config.DEVICE_NAME_BT:
+                os.environ["MODE_TYPE"] = "BT"
+            else:
+                os.environ["MODE_TYPE"] = "CUSTOM_NO_RX"
             write_log(f"Environment set from config: {device}, {os.environ['MODE_TYPE']}")
             return
         write_log("Not a relaunch. Proceeding to create device chooser.")
 
         popup = tk.Toplevel(root)
-        popup.title("Select MIDI Device")
+        popup.title("Select MIDI Device Mode") # Changed title
         popup.configure(bg=config.DARK_BG)
-        
+
         write_log("Calculating geometry for device chooser...")
         win_width = 900
         win_height = 600
@@ -266,53 +477,46 @@ def show_device_chooser(root):
         y = (screen_height // 2) - (win_height // 2)
         write_log(f"Screen dims: {screen_width}x{screen_height}. Window pos: +{x}+{y}")
         popup.geometry(f"{win_width}x{win_height}+{x}+{y}")
-        
-        # --- !! CRASH FIX !! ---
-        # popup.grab_set()
-        # popup.transient(root)
+
         write_log("Skipping grab_set() and transient() to prevent crash.")
-        # --- !! END FIX !! ---
-        
+
         write_log("Device chooser popup created and configured.")
 
-        list_devices_popup_instance = None 
+        list_devices_popup_instance = None
 
-        def select_device(mode):
-            write_log(f"select_device() called with mode: {mode}")
-            if mode == "BT": selected = config.DEFAULT_DEVICE
-            elif mode == "HYBRID": selected = config.HYBRID_DEVICE
-            elif mode == "USB_DIRECT": selected = config.USB_DIRECT_DEVICE
-            else: selected = config.DEFAULT_DEVICE
-            
-            os.environ["MIDI_DEVICE"] = selected
+        def select_device(mode, device_name):
+            write_log(f"select_device() called with mode: {mode}, device: {device_name}")
+
+            os.environ["MIDI_DEVICE"] = device_name
             os.environ["MODE_TYPE"] = mode
-            config.save_config(device=selected)
+            config.save_config(device=device_name) # Save the *selected* device for this session
             write_log(f"Device saved to config. Destroying popup.")
             popup.destroy()
 
         def timeout_default():
             write_log("timeout_default() called.")
             if popup.winfo_exists():
-                select_device("BT")
+                select_device("BT", config.DEVICE_NAME_BT)
 
         def select_from_list(device_name, window):
             write_log(f"select_from_list() called with: {device_name}")
             nonlocal list_devices_popup_instance
             window.destroy()
             list_devices_popup_instance = None
-            
+
             mode_type = "UNKNOWN"
             actual_device_to_set = device_name
 
-            if device_name == config.USB_DIRECT_DEVICE: mode_type = "USB_DIRECT"
-            elif device_name == config.HYBRID_DEVICE: mode_type = "HYBRID"
-            elif device_name == config.DEFAULT_DEVICE: mode_type = "BT"
-            elif device_name == config.QUAD_CORTEX_DEVICE:
-                actual_device_to_set = config.USB_DIRECT_DEVICE
+            if device_name == config.DEVICE_NAME_CH2:
                 mode_type = "USB_DIRECT"
-            
+            elif device_name == config.DEVICE_NAME_BT:
+                mode_type = "BT"
+            elif device_name == config.DEVICE_NAME_CH1:
+                actual_device_to_set = config.DEVICE_NAME_CH2
+                mode_type = "USB_DIRECT"
+
             if mode_type == "UNKNOWN": mode_type = "CUSTOM_NO_RX"
-            
+
             os.environ["MIDI_DEVICE"] = actual_device_to_set
             os.environ["MODE_TYPE"] = mode_type
             config.save_config(device=actual_device_to_set)
@@ -325,23 +529,18 @@ def show_device_chooser(root):
             if list_devices_popup_instance and list_devices_popup_instance.winfo_exists():
                 list_devices_popup_instance.lift()
                 return
-            
-            try:
-                write_log(f"Running: {config.SENDMIDI_PATH} list")
-                result = subprocess.run([config.SENDMIDI_PATH, "list"], capture_output=True, text=True, check=True)
-                device_list = result.stdout.strip().splitlines()
-                write_log(f"Found devices: {device_list}")
-            except Exception as e:
-                write_log(f"Error listing devices: {e}")
-                return
 
-            if not device_list:
-                write_log("No MIDI devices found.")
+            device_list = _get_device_list() # Use helper
+            write_log(f"Found devices: {device_list}")
+
+            if not device_list or device_list == ["Error: sendmidi not found"]:
+                write_log("No MIDI devices found or error.")
+                # Maybe show a small error message here?
                 return
 
             list_window = tk.Toplevel(popup)
             list_devices_popup_instance = list_window
-            
+
             def on_list_devices_popup_close():
                 write_log("list_devices popup closed by user.")
                 nonlocal list_devices_popup_instance
@@ -352,7 +551,7 @@ def show_device_chooser(root):
 
             list_window.title("Available MIDI Devices")
             list_window.configure(bg=config.DARK_BG)
-            
+
             win_width_list = 400
             win_height_list = 600
             list_window.update_idletasks()
@@ -364,48 +563,43 @@ def show_device_chooser(root):
             y_list_offset = y_list + 50
             write_log(f"List_devices popup geometry: +{x_list_offset}+{y_list_offset}")
             list_window.geometry(f"{win_width_list}x{win_height_list}+{x_list_offset}+{y_list_offset}")
-            
+
             tk.Label(list_window, text="Select a MIDI Device:", font=config.big_font, bg=config.DARK_BG, fg=config.DARK_FG).pack(pady=10)
-            active_devices, disabled_devices = [], []
+            
+            # Simplified device display logic
             for dev in device_list:
-                if dev == "Microsoft GS Wavetable Synth" or dev.startswith("MIDIOUT"):
-                    disabled_devices.append(dev)
-                else: active_devices.append(dev)
-            for dev in active_devices:
-                tk.Button(list_window, text=dev, font=config.narrow_font_plain, width=40, pady=10,
+                 tk.Button(list_window, text=dev, font=config.narrow_font_plain, width=40, pady=10,
                           bg=config.BUTTON_BG, fg=config.DARK_FG,
                           command=(lambda d=dev: select_from_list(d, list_window))).pack(pady=5)
-            for dev in disabled_devices:
-                tk.Button(list_window, text=dev, font=config.narrow_font_plain, width=40, pady=10,
-                          bg=config.DISABLED_BG, fg="#999999", state="disabled").pack(pady=5)
+            # No disabled list needed here as we filter in _get_device_list
+
             write_log("List devices popup created.")
 
-        
-        # --- Main Widgets for Device Chooser ---
+
         write_log("Creating main widgets for device chooser...")
         tk.Label(popup, text="Select MIDI Device Mode:", bg=config.DARK_BG, fg=config.DARK_FG, font=config.big_font).pack(pady=10)
         btn_frame = tk.Frame(popup, bg=config.DARK_BG)
         btn_frame.pack(pady=5)
-        
+
         tk.Button(btn_frame, text="BT (Default)", font=config.big_font, width=30, height=2,
-                  command=lambda: select_device("BT"), bg="#2a8f44", fg="white").grid(row=0, column=0, pady=5, padx=5)
+                  command=lambda: select_device("BT", config.DEVICE_NAME_BT), bg="#2a8f44", fg="white").grid(row=0, column=0, pady=5, padx=5)
         tk.Button(btn_frame, text="USB Direct\n(Uses receivemidi)", font=config.big_font, width=30, height=2,
-                  command=lambda: select_device("USB_DIRECT"), bg="#b02f2f", fg="white").grid(row=1, column=0, pady=5, padx=5)
+                  command=lambda: select_device("USB_DIRECT", config.DEVICE_NAME_CH2), bg="#b02f2f", fg="white").grid(row=1, column=0, pady=5, padx=5)
         tk.Button(btn_frame, text="Hybrid\n(No receivemidi)", font=config.big_font, width=30, height=2,
-                  command=lambda: select_device("HYBRID"), bg="#28578f", fg="white").grid(row=2, column=0, pady=5, padx=5)
-        
+                  command=lambda: select_device("HYBRID", config.DEVICE_NAME_CH2), bg="#28578f", fg="white").grid(row=2, column=0, pady=5, padx=5)
+
         initial_debug_state = conf.get("debug_enabled", False)
         debug_var = tk.BooleanVar(value=initial_debug_state)
-        
+
         def toggle_debug_logging():
             write_log(f"Debug logging toggled to: {debug_var.get()}")
             config.save_config(debug_enabled=debug_var.get())
-            
+
         tk.Checkbutton(popup, text="Enable MIDI Debug Logging (Prints commands to console)",
                        variable=debug_var, command=toggle_debug_logging, bg=config.DARK_BG,
                        fg=config.DARK_FG, selectcolor=config.DARK_BG, activebackground=config.DARK_BG,
                        activeforeground=config.DARK_FG, font=config.narrow_font_plain).pack(pady=(20, 10))
-        
+
         tk.Button(popup, text="List MIDI Devices", font=config.narrow_font_plain, command=list_devices,
                   bg="#444444", fg=config.DARK_FG, bd=0, padx=6, pady=6, height=2).pack(pady=5)
 
@@ -422,7 +616,7 @@ def show_device_chooser(root):
                 write_log("Countdown finished. Timing out to default.")
                 timeout_default()
         countdown()
-        
+
         write_log("Calling root.wait_window(popup) for device chooser... (Window should be visible NOW)")
         root.wait_window(popup)
         write_log("root.wait_window(popup) for device chooser has finished.")

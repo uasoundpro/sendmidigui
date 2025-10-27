@@ -21,17 +21,17 @@ class MidiSenderApp:
         try:
             self.config = config.load_config()
 
-            self.midi_device = os.environ.get("MIDI_DEVICE", config.DEFAULT_DEVICE)
+            # --- !! Set initial device/mode based on environment !! ---
+            self.midi_device = os.environ.get("MIDI_DEVICE", config.DEVICE_NAME_BT)
             self.mode_type = os.environ.get("MODE_TYPE", "BT")
-            self.debug_enabled = self.config.get("debug_enabled", False)
+            # --- !! End Set initial !! ---
 
-            # --- !! ADDED THIS LINE !! ---
-            # Create the Tkinter variable for the debug checkbox
+            self.debug_enabled = self.config.get("debug_enabled", False)
             self.debug_var = tk.BooleanVar(value=self.debug_enabled)
-            # --- !! END ADDITION !! ---
 
             self.midi_manager.set_mode(self.midi_device, self.mode_type, self.debug_enabled)
 
+            # Clear flag if it exists (though not used for relaunch signal anymore)
             if self.config.get("relaunch_on_monitor_fail"):
                 config.save_config(relaunch_on_monitor_fail=False)
 
@@ -101,6 +101,7 @@ class MidiSenderApp:
             except:
                 pass
         self.midi_manager.kill_receivemidi()
+        # Save the *last active* device before closing, used by non-relaunch starts
         config.save_config(device=self.midi_device)
         if self.root and self.root.winfo_exists():
              self.root.destroy()
@@ -135,7 +136,6 @@ class MidiSenderApp:
                   command=self.show_setlist_selection_popup, bg="#444444", fg=config.DARK_FG,
                   bd=0, padx=6, pady=6, height=2).pack(side="left", padx=(5, 0))
 
-        # --- USB Lock Checkbox (Remains the same) ---
         initial_usb_lock_state = self.config.get("usb_lock_active", False)
         self.usb_lock_var = tk.BooleanVar(value=initial_usb_lock_state)
         self.usb_lock_checkbox = tk.Checkbutton(
@@ -146,19 +146,16 @@ class MidiSenderApp:
         )
         self.usb_lock_checkbox.pack(side="left", padx=(5, 0))
 
-        # --- !! ADDED DEBUG CHECKBOX !! ---
         debug_checkbox_main = tk.Checkbutton(
             controls_frame,
-            text="Debug", # Keep it short
-            variable=self.debug_var, # Use the new variable
-            command=self.toggle_debug_logging, # Use the new method
+            text="Debug",
+            variable=self.debug_var,
+            command=self.toggle_debug_logging,
             bg=config.DARK_BG, fg=config.DARK_FG, selectcolor=config.DARK_BG,
             activebackground=config.DARK_BG, activeforeground=config.DARK_FG,
             font=config.narrow_font_plain, relief="raised", bd=2
         )
-        # Pack it next to the lock checkbox
         debug_checkbox_main.pack(side="left", padx=(5, 0))
-        # --- !! END ADDITION !! ---
 
 
         up_button_frame = tk.Frame(self.root, bg=config.DARK_BG)
@@ -191,15 +188,13 @@ class MidiSenderApp:
                                   command=self.scroll_down, bg=config.BUTTON_BG, fg=config.DARK_FG, relief="raised", bd=2)
         self.btn_down.pack(fill="x")
 
-    # --- !! ADDED THIS METHOD !! ---
     def toggle_debug_logging(self):
         """Called when the main debug checkbox is clicked."""
         new_state = self.debug_var.get()
-        self.debug_enabled = new_state # Update app's internal state
-        self.midi_manager.set_debug_state(new_state) # Update manager's state
-        config.save_config(debug_enabled=new_state) # Save to config
-        print(f"Debug logging {'enabled' if new_state else 'disabled'} by main checkbox.") # User feedback
-    # --- !! END ADDITION !! ---
+        self.debug_enabled = new_state
+        self.midi_manager.set_debug_state(new_state)
+        config.save_config(debug_enabled=new_state)
+        print(f"Debug logging {'enabled' if new_state else 'disabled'} by main checkbox.")
 
 
     def scroll_up(self):
@@ -214,8 +209,7 @@ class MidiSenderApp:
 
     def show_toast(self, msg, duration=2000, bg="#303030", fg="white"):
         """
-        Thread-safe method to show a toast.
-        Schedules the toast to be shown on the main GUI thread.
+        Thread-safe method to show a toast. Schedules it on the main GUI thread.
         """
         if self.root and self.root.winfo_exists():
             self.root.after(0, self._show_toast_on_main_thread, msg, duration, bg, fg)
@@ -223,62 +217,63 @@ class MidiSenderApp:
     def _show_toast_on_main_thread(self, msg, duration=2000, bg="#303030", fg="white"):
         """Internal function that *must* run on the main thread."""
         try:
-            if not self.root or not self.root.winfo_exists():
-                return
-
-            if self.toast_timer:
-                self.root.after_cancel(self.toast_timer)
-                self.toast_timer = None
-
+            if not self.root or not self.root.winfo_exists(): return
+            if self.toast_timer: self.root.after_cancel(self.toast_timer); self.toast_timer = None
             if not self.toast_label or not self.toast_label.winfo_exists():
                 self.toast_label = tk.Label(self.root, font=config.narrow_font_small)
-
             self.toast_label.config(text=msg, bg=bg, fg=fg)
             self.toast_label.place(relx=1.0, rely=0, anchor="ne", x=-5, y=5)
             self.toast_label.lift()
-
             self.toast_timer = self.root.after(duration, self._hide_toast)
-
-        except Exception as e:
-            print(f"Error in _show_toast_on_main_thread (msg='{msg}', bg='{bg}'): {e}")
+        except Exception as e: print(f"Error in _show_toast_on_main_thread: {e}")
 
     def _hide_toast(self):
         """Hides the persistent toast label. Runs on main thread."""
         try:
-            if self.root and self.root.winfo_exists() and \
-               self.toast_label and self.toast_label.winfo_exists():
+            if self.root and self.root.winfo_exists() and self.toast_label and self.toast_label.winfo_exists():
                 self.toast_label.place_forget()
             self.toast_timer = None
-        except Exception as e:
-            print(f"Error in _hide_toast: {e}")
+        except Exception as e: print(f"Error in _hide_toast: {e}")
 
 
     def _set_device_mode(self, new_mode_type, new_device, should_relaunch=False):
-
+        """Sets the MIDI device and mode, optionally relaunching the app."""
         self.midi_manager.kill_receivemidi()
-        config.save_config(device=new_device)
+        # Don't save device here, only on clean exit (on_close) or manual switch (switch_and_close)
 
         self.midi_device = new_device
         self.mode_type = new_mode_type
 
-        # Pass the current debug state to the manager when mode changes
+        # Update manager state
         self.midi_manager.set_mode(self.midi_device, self.mode_type, self.debug_enabled)
 
-        if self.mode_label and self.mode_label.winfo_exists():
+        # Update GUI label if it exists
+        if hasattr(self, 'mode_label') and self.mode_label and self.mode_label.winfo_exists():
              self.mode_label.config(text=f"Current Mode: {self.mode_type}")
 
         if should_relaunch:
-            config.save_config(relaunch_on_monitor_fail=True)
+            print(f"Relaunching into mode: {new_mode_type} with device: {new_device}")
             new_env = os.environ.copy()
             new_env["MIDI_DEBUG_ENABLED"] = str(self.debug_enabled)
-            subprocess.Popen([sys.executable, sys.argv[0]], env=new_env, creationflags=subprocess.CREATE_NO_WINDOW)
+            # --- !! MODIFICATION: Pass target device via env var for relaunch !! ---
+            new_env["RELAUNCH_MIDI_DEVICE"] = new_device # Use this in main.py
+            # --- !! END MODIFICATION !! ---
+
+            # --- !! MODIFICATION: Pass target mode via command line arg !! ---
+            relaunch_command = [sys.executable, sys.argv[0], f"--relaunch={new_mode_type}"]
+            # --- !! END MODIFICATION !! ---
+
+            subprocess.Popen(relaunch_command, env=new_env, creationflags=subprocess.CREATE_NO_WINDOW)
+
             if self.root and self.root.winfo_exists(): self.root.destroy()
             return
 
+        # If not relaunching, start receivemidi if needed
         self.midi_manager.start_receivemidi()
         self.show_toast(f"Switched to {self.mode_type} mode: {self.midi_device}")
 
     def _load_and_display_patches(self):
+        # (Function content unchanged - Keep previous version)
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.all_buttons.clear()
@@ -323,8 +318,14 @@ class MidiSenderApp:
             msg = f"Error: CSV file '{self.csv_file}' not found."
             print(msg)
             self.show_toast(msg, bg="red")
+        except Exception as e: # Catch other potential errors
+            msg = f"Error loading CSV '{self.csv_file}': {e}"
+            print(msg)
+            traceback.print_exc()
+            self.show_toast(msg, bg="red")
 
     def patch_func_factory(self, current_btn, label, prog1, prog2, cc_commands):
+        # (Function content unchanged - Keep previous version)
         def patch_func():
             now = time.time()
             if now - self.last_press_time < 1:
@@ -338,7 +339,6 @@ class MidiSenderApp:
                  try: current_btn.config(bg=config.HIGHLIGHT_BG)
                  except tk.TclError: pass
             self.last_selected_button = current_btn
-
 
             for b in self.all_buttons:
                 if b.winfo_exists():
@@ -355,7 +355,7 @@ class MidiSenderApp:
             commands_ch1_before = []
             commands_after = []
 
-            if self.midi_device == config.USB_DIRECT_DEVICE or self.midi_device == config.HYBRID_DEVICE:
+            if self.midi_device == config.DEVICE_NAME_CH2:
                 for cmd in all_commands_for_this_patch:
                     if self.mode_type == "USB_DIRECT" and len(cmd) > 1 and cmd[0] == "ch" and cmd[1] == "1" and cmd[2] == "pc":
                         commands_ch1_before.append(cmd)
@@ -367,57 +367,62 @@ class MidiSenderApp:
             if label == "TEST 123" and ["ch", "1", "pc", "126"] not in commands_ch1_before and self.mode_type != "BT":
                 commands_ch1_before.insert(0, ["ch", "1", "pc", "126"])
 
-
             def _send_patch_commands_in_thread():
                 root_exists = self.root and self.root.winfo_exists()
+                try: # Add try/except around MIDI sending
+                    for cmd in commands_ch1_before:
+                        self.midi_manager.send_midi([cmd])
+                    if commands_ch1_before:
+                        time.sleep(0.05)
 
-                for cmd in commands_ch1_before:
-                    self.midi_manager.send_midi([cmd])
-                if commands_ch1_before:
-                    time.sleep(0.05)
+                    self.midi_manager.start_receivemidi()
+                    time.sleep(1)
 
-                self.midi_manager.start_receivemidi()
-                time.sleep(1)
+                    if label == "TEST 123":
+                        def create_test_toast():
+                            if self.root and self.root.winfo_exists():
+                                if self.testing_toast_label and self.testing_toast_label.winfo_exists():
+                                    self.testing_toast_label.destroy()
+                                self.testing_toast_label = tk.Label(self.root, text="TESTING", bg="red", fg="white", font=config.big_font)
+                                self.testing_toast_label.place(relx=0.5, rely=0.1, anchor="n")
+                                self.testing_toast_label.lift()
 
-                if label == "TEST 123":
-                    def create_test_toast():
-                        if self.root and self.root.winfo_exists():
-                            if self.testing_toast_label and self.testing_toast_label.winfo_exists():
+                        if root_exists: self.root.after(0, create_test_toast)
+
+                        for cmd in commands_after:
+                            self.midi_manager.send_midi([cmd])
+                            time.sleep(0.25)
+
+                        if root_exists:
+                            self.root.after(0, lambda: [
                                 self.testing_toast_label.destroy()
-                            self.testing_toast_label = tk.Label(self.root, text="TESTING", bg="red", fg="white", font=config.big_font)
-                            self.testing_toast_label.place(relx=0.5, rely=0.1, anchor="n")
-                            self.testing_toast_label.lift()
+                                if self.testing_toast_label and self.testing_toast_label.winfo_exists() else None
+                            ])
 
-                    if root_exists: self.root.after(0, create_test_toast)
+                    else:
+                        for cmd in commands_after:
+                            self.midi_manager.send_midi([cmd])
+                            time.sleep(0.25)
 
-                    for cmd in commands_after:
-                        self.midi_manager.send_midi([cmd])
-                        time.sleep(0.25)
-
+                except Exception as midi_err:
+                    print(f"Error during MIDI send thread: {midi_err}")
+                    traceback.print_exc()
                     if root_exists:
-                         self.root.after(0, lambda: [
-                             b.config(state="normal") for b in self.all_buttons if b.winfo_exists()
-                         ])
-                         self.root.after(0, lambda: [
-                             self.testing_toast_label.destroy()
-                             if self.testing_toast_label and self.testing_toast_label.winfo_exists() else None
-                         ])
+                        self.root.after(0, lambda: self.show_toast(f"MIDI Send Error: {midi_err}", bg="red", duration=5000))
 
-                else:
-                    for cmd in commands_after:
-                        self.midi_manager.send_midi([cmd])
-                        time.sleep(0.25)
-
+                finally: # Ensure buttons are re-enabled even if an error occurs
                     if root_exists:
-                         self.root.after(0, lambda: [
-                             b.config(state="normal") for b in self.all_buttons if b.winfo_exists()
-                         ])
+                        self.root.after(0, lambda: [
+                            b.config(state="normal") for b in self.all_buttons if b.winfo_exists()
+                        ])
 
             threading.Thread(target=_send_patch_commands_in_thread, daemon=True).start()
 
         return patch_func
 
+
     def show_device_switch_popup(self):
+        # (Function content unchanged - Keep previous version)
         if self.device_switch_popup and self.device_switch_popup.winfo_exists():
             self.device_switch_popup.lift()
             return
@@ -445,18 +450,21 @@ class MidiSenderApp:
         btn_frame.pack(pady=20)
 
         def switch_and_close(mode, device):
+            # Save the manually selected device here
+            config.save_config(device=device)
             self._set_device_mode(mode, device, should_relaunch=False)
             popup.destroy()
 
         tk.Button(btn_frame, text="BT (Default)", font=config.big_font, width=30, height=2,
-                  command=lambda: switch_and_close("BT", config.DEFAULT_DEVICE), bg="#2a8f44", fg="white").pack(pady=5)
+                  command=lambda: switch_and_close("BT", config.DEVICE_NAME_BT), bg="#2a8f44", fg="white").pack(pady=5)
         tk.Button(btn_frame, text="USB Direct\n(Uses receivemidi)", font=config.big_font, width=30, height=2,
-                  command=lambda: switch_and_close("USB_DIRECT", config.USB_DIRECT_DEVICE), bg="#b02f2f", fg="white").pack(pady=5)
+                  command=lambda: switch_and_close("USB_DIRECT", config.DEVICE_NAME_CH2), bg="#b02f2f", fg="white").pack(pady=5)
         tk.Button(btn_frame, text="Hybrid\n(No receivemidi)", font=config.big_font, width=30, height=2,
-                  command=lambda: switch_and_close("HYBRID", config.HYBRID_DEVICE), bg="#28578f", fg="white").pack(pady=5)
+                  command=lambda: switch_and_close("HYBRID", config.DEVICE_NAME_CH2), bg="#28578f", fg="white").pack(pady=5)
 
 
     def list_devices(self):
+        # (Function content unchanged - Keep previous version)
         if self.list_devices_popup_window and self.list_devices_popup_window.winfo_exists():
             self.list_devices_popup_window.lift()
             return
@@ -485,14 +493,17 @@ class MidiSenderApp:
         def select_new_device(device_name):
             mode_type = "UNKNOWN"
             actual_device = device_name
-            if device_name == config.USB_DIRECT_DEVICE: mode_type = "USB_DIRECT"
-            elif device_name == config.HYBRID_DEVICE: mode_type = "HYBRID"
-            elif device_name == config.DEFAULT_DEVICE: mode_type = "BT"
-            elif device_name == config.QUAD_CORTEX_DEVICE:
-                actual_device = config.USB_DIRECT_DEVICE
+            
+            if device_name == config.DEVICE_NAME_CH2: mode_type = "USB_DIRECT"
+            elif device_name == config.DEVICE_NAME_BT: mode_type = "BT"
+            elif device_name == config.DEVICE_NAME_CH1:
+                actual_device = config.DEVICE_NAME_CH2
                 mode_type = "USB_DIRECT"
+                
             if mode_type == "UNKNOWN": mode_type = "CUSTOM_NO_RX"
 
+            # Save the manually selected device here
+            config.save_config(device=actual_device)
             self._set_device_mode(mode_type, actual_device, should_relaunch=False)
             popup.destroy()
 
@@ -507,6 +518,7 @@ class MidiSenderApp:
 
 
     def show_setlist_selection_popup(self):
+        # (Function content unchanged - Keep previous version)
         if self.setlist_popup_window and self.setlist_popup_window.winfo_exists():
             self.setlist_popup_window.lift()
             return
@@ -587,11 +599,12 @@ class MidiSenderApp:
 
 
     def _create_device_popup(self, title, message, ack_text, decline_text, is_failback):
+        # (Function content unchanged - Keep previous version)
         if self.device_change_popup and self.device_change_popup.winfo_exists():
-            return
+            return # Avoid multiple popups
 
         popup = tk.Toplevel(self.root)
-        self.device_change_popup = popup
+        self.device_change_popup = popup # Store reference
         popup.title(title)
         popup.configure(bg=config.DARK_BG)
 
@@ -604,29 +617,33 @@ class MidiSenderApp:
         y = (screen_height // 2) - (win_height // 2)
         popup.geometry(f"{win_width}x{win_height}+{x}+{y}")
 
-        try: popup.grab_set()
-        except tk.TclError: print("Grab_set failed in _create_device_popup")
-        try: popup.transient(self.root)
-        except tk.TclError: print("Transient failed in _create_device_popup")
-
+        # Make it modal ONLY if the root window is visible
+        if self.root.winfo_viewable():
+            try: popup.grab_set()
+            except tk.TclError: print("Grab_set failed in _create_device_popup")
+            try: popup.transient(self.root)
+            except tk.TclError: print("Transient failed in _create_device_popup")
 
         tk.Label(popup, text=title.replace("!", ""), font=("Arial", 24, "bold"),
                  bg=config.DARK_BG, fg=("red" if not is_failback else "#2a8f44")).pack(pady=20)
         tk.Label(popup, text=message, font=("Arial", 14), bg=config.DARK_BG, fg=config.DARK_FG).pack(pady=10)
 
-        switch_choice = [None]
+        switch_choice = [None] # Use list to allow modification in nested functions
 
         def on_ack():
             switch_choice[0] = True
-            if is_failback:
-                self.midi_manager.set_user_declined_switch(False)
-            popup.destroy()
+            if is_failback: self.midi_manager.set_user_declined_switch(False)
+            if popup.winfo_exists(): popup.destroy()
+            self.device_change_popup = None # Clear reference
 
         def on_decline():
             switch_choice[0] = False
-            if is_failback:
-                self.midi_manager.set_user_declined_switch(True)
-            popup.destroy()
+            if is_failback: self.midi_manager.set_user_declined_switch(True)
+            if popup.winfo_exists(): popup.destroy()
+            self.device_change_popup = None # Clear reference
+
+        # Ensure popup closes cleanly if user closes window
+        popup.protocol("WM_DELETE_WINDOW", on_decline if decline_text else on_ack)
 
         btn_frame = tk.Frame(popup, bg=config.DARK_BG)
         btn_frame.pack(pady=20)
@@ -638,82 +655,69 @@ class MidiSenderApp:
             tk.Button(btn_frame, text=decline_text, font=("Arial", 16), command=on_decline,
                       bg=("#28578f" if is_failback else "#444444"), fg="white").pack(side="right", padx=10)
 
+        # Use wait_window to block until popup is closed
         self.root.wait_window(popup)
-        self.device_change_popup = None
         return switch_choice[0]
 
 
     def handle_monitor_event(self, event_type, data=None):
+        # (Function content mostly unchanged, just ensure failback logic calls _set_device_mode correctly)
         try:
-            # Uncomment for intense debugging
-            # print(f"DEBUG: handle_monitor_event received: Type={event_type}, Data={data}")
-
             if event_type == "TOAST":
                 message = data.get("message", "No message")
                 color = data.get("color", "#303030")
                 self.show_toast(message, bg=color)
 
             elif event_type == "MIDI_ACTIVITY":
-                # Uncomment for intense debugging
-                # print(f"DEBUG: Processing MIDI_ACTIVITY: {data}")
                 status = data.get("status")
-                if status == "SENDING":
-                    self.show_toast("SENDING", duration=250, bg=config.TOAST_YELLOW, fg="#000000")
-                elif status == "RECEIVING":
-                    self.show_toast("RECEIVING", duration=250, bg=config.TOAST_YELLOW, fg="#000000")
+                if status == "SENDING": self.show_toast("SENDING", duration=250, bg=config.TOAST_YELLOW, fg="#000000")
+                elif status == "RECEIVING": self.show_toast("RECEIVING", duration=250, bg=config.TOAST_YELLOW, fg="#000000")
 
             elif event_type == "GET_USB_LOCK_STATE":
-                # Need to check if var exists and return value safely
                 if hasattr(self, 'usb_lock_var') and self.usb_lock_var:
-                    try:
-                        return self.usb_lock_var.get()
-                    except tk.TclError: # Handle case where window/var is destroyed
-                        return False
-                return False # Default if var not ready
+                    try: return self.usb_lock_var.get()
+                    except tk.TclError: return False
+                return False
 
             elif event_type == "USB_STATUS_UPDATE":
-                # Add checks for widget existence
-                if not data or not hasattr(self, 'mode_label') or not self.mode_label or not self.mode_label.winfo_exists():
-                    return
+                if not data or not hasattr(self, 'mode_label') or not self.mode_label or not self.mode_label.winfo_exists(): return
 
                 label_text = data["mode_label_text"]
                 usb_present = data["usb_devices_present"]
                 current_mode = data["current_mode"]
-
                 checkbox_exists = hasattr(self, 'usb_lock_checkbox') and self.usb_lock_checkbox and self.usb_lock_checkbox.winfo_exists()
 
                 if current_mode == "USB_DIRECT" or current_mode == "HYBRID":
                     if not usb_present:
                         self.mode_label.config(text=label_text, fg="red")
-                        if checkbox_exists:
-                            self.usb_lock_checkbox.config(bg=config.USB_UNAVAILABLE_COLOR, activebackground=config.USB_UNAVAILABLE_ACTIVE_COLOR)
+                        if checkbox_exists: self.usb_lock_checkbox.config(bg=config.USB_UNAVAILABLE_COLOR, activebackground=config.USB_UNAVAILABLE_ACTIVE_COLOR)
                     else:
                         self.mode_label.config(text=label_text, fg=config.USB_AVAILABLE_COLOR)
-                        if checkbox_exists:
-                             self.usb_lock_checkbox.config(bg=config.USB_AVAILABLE_COLOR, activebackground=config.USB_AVAILABLE_ACTIVE_COLOR)
-
+                        if checkbox_exists: self.usb_lock_checkbox.config(bg=config.USB_AVAILABLE_COLOR, activebackground=config.USB_AVAILABLE_ACTIVE_COLOR)
                 elif current_mode == "BT":
                     if usb_present:
                         self.mode_label.config(text=f"{label_text} (USB AVAILABLE)", fg=config.USB_AVAILABLE_COLOR)
-                        if checkbox_exists:
-                             self.usb_lock_checkbox.config(bg=config.USB_AVAILABLE_COLOR, activebackground=config.USB_AVAILABLE_ACTIVE_COLOR)
+                        if checkbox_exists: self.usb_lock_checkbox.config(bg=config.USB_AVAILABLE_COLOR, activebackground=config.USB_AVAILABLE_ACTIVE_COLOR)
                     else:
                         self.mode_label.config(text=label_text, fg=config.DARK_FG)
-                        if checkbox_exists:
-                             self.usb_lock_checkbox.config(bg=config.DARK_BG, activebackground=config.DARK_BG)
+                        if checkbox_exists: self.usb_lock_checkbox.config(bg=config.DARK_BG, activebackground=config.DARK_BG)
 
             elif event_type == "TRIGGER_FAILOVER":
-                message = "USB Device failed! Check MIDIberry settings. Defaulting to BLUETOOTH connection\n(power on rack WIDI jack first)."
-                self._create_device_popup("USB Device Disconnected!", message, "OK", None, False)
-                self._set_device_mode("BT", config.DEFAULT_DEVICE, should_relaunch=True)
+                self.show_toast("USB Disconnected! Failing over to Bluetooth...", bg="red", duration=4000)
+                self._set_device_mode("BT", config.DEVICE_NAME_BT, should_relaunch=True)
 
             elif event_type == "TRIGGER_FAILBACK_POPUP":
-                message = "Both Morningstar MC8 Pro and Quad Cortex MIDI Control\nhave reconnected via USB. Do you want to switch back to USB Direct mode?"
+                message = f"Both {config.DEVICE_NAME_CH2} and {config.DEVICE_NAME_CH1}\nhave reconnected via USB. Do you want to switch back to USB Direct mode?"
                 choice = self._create_device_popup("USB Devices Reconnected!", message,
                                                    "Acknowledge & Switch to USB Direct", "No, stay on Bluetooth", True)
 
-                if choice == True:
-                    self._set_device_mode("USB_DIRECT", config.USB_DIRECT_DEVICE, should_relaunch=True)
+                # --- !! Ensure this logic is correct !! ---
+                if choice is True: # Explicitly check for True (handles None if popup closed unexpectedly)
+                    print("User chose to failback to USB_DIRECT. Relaunching...") # Debug print
+                    self._set_device_mode("USB_DIRECT", config.DEVICE_NAME_CH2, should_relaunch=True)
+                else:
+                    print("User declined failback or closed popup.") # Debug print
+                # --- !! End Check !! ---
 
         except Exception as e:
             print(f"---!! FATAL ERROR in handle_monitor_event !!---")
