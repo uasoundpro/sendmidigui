@@ -2,6 +2,17 @@
 
 This document outlines the key functional and structural changes made to the `SendMidiGui.py` script, primarily focusing on the evolution of the MIDI connection management and control features.
 
+## VERSION 1.1.3
+DATE: 2025-10-27
+
+### I. Hybrid Mode Control
+
+| Feature | Change Description | Impact |
+| :--- | :--- | :--- |
+| **Manual CH1 Reroute Override** | Added a global state (`ch1_override_active`) and a new **checkbox** ("Force CH1 Reroute (Hybrid)") in the main GUI. This checkbox is saved to `config.json`. | Allows the user to manually force MIDI Channel 1 messages to be rerouted to the Channel 2 device (e.g., MC8) **only when in Hybrid mode**, even if the primary Channel 1 device (e.g., Quad Cortex) is connected. The checkbox is disabled and automatically unchecked in BT or USB Direct modes. Its color turns red when active (checked). |
+
+---
+
 ## VERSION 1.1.x
 DATE: 2025-10-25
 
