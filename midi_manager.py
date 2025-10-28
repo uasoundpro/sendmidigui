@@ -23,6 +23,7 @@ class MidiManager:
         self._usb_stable_start_time = None
         self._user_declined_usb_switch = False
         self._usb_disconnect_warning_shown = False
+        self._bt_disconnect_warning_shown = False # <-- ADDED
         self._root = None
 
     def set_root(self, root):
@@ -40,6 +41,8 @@ class MidiManager:
         if self.mode_type == "USB_DIRECT" or self.mode_type == "HYBRID":
             self._user_declined_usb_switch = False
             self._usb_disconnect_warning_shown = False
+            
+        self._bt_disconnect_warning_shown = False # <-- ADDED
 
     # --- !! ADDED THIS METHOD !! ---
     def set_debug_state(self, enabled):
@@ -229,6 +232,22 @@ class MidiManager:
             usb_lock_active = False
             if self._root and self._root.winfo_exists():
                  usb_lock_active = self.gui_callback("GET_USB_LOCK_STATE")
+
+            # --- !! NEW: CRITICAL BT FAILURE CHECK !! ---
+            # Check if we are in BT mode and the BT device is missing
+            bt_present = config.DEVICE_NAME_BT in devices
+            if self.mode_type == "BT" and not bt_present:
+                if not self._bt_disconnect_warning_shown:
+                    self._bt_disconnect_warning_shown = True # Set flag to prevent spamming
+                    print("CRITICAL: Bluetooth device not found!")
+                    if self._root and self._root.winfo_exists():
+                        # Send the new event to the GUI
+                        self._root.after(0, lambda: self.gui_callback("TRIGGER_BT_FAILURE_POPUP"))
+                return # Stop this monitor cycle; wait for user action
+            elif self.mode_type == "BT" and bt_present:
+                # If device reappears, reset the flag
+                self._bt_disconnect_warning_shown = False
+            # --- !! END OF NEW CHECK !! ---
 
             # --- !! MODIFIED FAILOVER LOGIC !! ---
             trigger_failover = False

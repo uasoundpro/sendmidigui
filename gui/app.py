@@ -771,6 +771,88 @@ class MidiSenderApp:
         return switch_choice[0]
 
 
+    # --- !! NEW: BT FAILURE POPUP METHOD !! ---
+    def _show_bt_failure_popup(self):
+        """
+        Shows a blocking, critical popup when the BT device is lost.
+        Gives the user the option to relaunch the config or exit.
+        """
+        # Use device_change_popup to prevent multiple popups
+        if self.device_change_popup and self.device_change_popup.winfo_exists():
+            return 
+
+        popup = tk.Toplevel(self.root)
+        self.device_change_popup = popup # Store reference
+        popup.title("CRITICAL BLUETOOTH ERROR")
+        popup.configure(bg=config.DARK_BG)
+        self._add_version_label(popup) # Add version label
+
+        win_width = 800
+        win_height = 400
+        popup.update_idletasks()
+        screen_width = popup.winfo_screenwidth()
+        screen_height = popup.winfo_screenheight()
+        x = (screen_width // 2) - (win_width // 2)
+        y = (screen_height // 2) - (win_height // 2)
+        popup.geometry(f"{win_width}x{win_height}+{x}+{y}")
+
+        # Make it modal
+        if self.root.winfo_viewable():
+            try: popup.grab_set()
+            except tk.TclError: print("Grab_set failed in _show_bt_failure_popup")
+            try: popup.transient(self.root)
+            except tk.TclError: print("Transient failed in _show_bt_failure_popup")
+
+        tk.Label(popup, text="Bluetooth Device Not Found!", font=("Arial", 24, "bold"),
+                 bg=config.DARK_BG, fg="red").pack(pady=20)
+        
+        message = f"The app can no longer find the assigned Bluetooth device:\n'{config.DEVICE_NAME_BT}'\n\n" \
+                  "Please check your device connection or Bluetooth settings.\n\n" \
+                  "Relaunch configuration to select a new device, or exit."
+        tk.Label(popup, text=message, font=("Arial", 14), bg=config.DARK_BG, fg=config.DARK_FG).pack(pady=10)
+
+
+        def on_relaunch():
+            """Relaunches the app from scratch, triggering main.py setup popups."""
+            print("Relaunching configuration...")
+            try:
+                # This command restarts main.py *without* any --relaunch flags
+                relaunch_command = [sys.executable, sys.argv[0]]
+                subprocess.Popen(relaunch_command)
+                
+                self.device_change_popup = None # Clear reference
+                if popup.winfo_exists(): popup.destroy()
+                self.on_close() # Close the current (broken) app instance
+            except Exception as e:
+                print(f"Failed to relaunch: {e}")
+                traceback.print_exc()
+
+        def on_exit():
+            """Exits the application."""
+            print("Exiting application...")
+            self.device_change_popup = None # Clear reference
+            if popup.winfo_exists(): popup.destroy()
+            self.on_close() # Close the main app
+
+        # Ensure popup closes cleanly if user closes window
+        popup.protocol("WM_DELETE_WINDOW", on_exit)
+
+        btn_frame = tk.Frame(popup, bg=config.DARK_BG)
+        btn_frame.pack(pady=20)
+
+        # "Relaunch" button
+        tk.Button(btn_frame, text="Relaunch Configuration", font=("Arial", 16), command=on_relaunch,
+                  bg="#b02f2f", fg="white").pack(side="left", padx=10)
+
+        # "Exit" button
+        tk.Button(btn_frame, text="Exit Application", font=("Arial", 16), command=on_exit,
+                  bg="#444444", fg="white").pack(side="right", padx=10)
+
+        # Use wait_window to block until popup is closed
+        self.root.wait_window(popup)
+    # --- !! END NEW METHOD !! ---
+
+
     def handle_monitor_event(self, event_type, data=None):
         try:
             if event_type == "TOAST":
@@ -857,6 +939,13 @@ class MidiSenderApp:
                 else:
                     print("User declined failback or closed popup.") # Debug print
                 # --- !! End Check !! ---
+
+            # --- !! ADD THIS NEW BLOCK !! ---
+            elif event_type == "TRIGGER_BT_FAILURE_POPUP":
+                # This event is triggered by the monitor when in BT mode
+                # and the assigned BT device can no longer be found.
+                self._show_bt_failure_popup()
+            # --- !! END NEW BLOCK !! ---
 
         except Exception as e:
             print(f"---!! FATAL ERROR in handle_monitor_event !!---")
