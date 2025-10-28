@@ -527,7 +527,7 @@ class MidiSenderApp:
 
 
     def list_devices(self):
-        # (Function content unchanged - Keep previous version)
+        # Prevent opening multiple list windows
         if self.list_devices_popup_window and self.list_devices_popup_window.winfo_exists():
             self.list_devices_popup_window.lift()
             return
@@ -538,10 +538,19 @@ class MidiSenderApp:
             return
 
         popup = tk.Toplevel(self.root)
-        self.list_devices_popup_window = popup
+        self.list_devices_popup_window = popup # Store reference
+
+        # --- !! NEW: Simple close function !! ---
+        def on_list_devices_popup_close():
+            self.list_devices_popup_window = None # Clear reference
+            if popup.winfo_exists(): popup.destroy()
+        popup.protocol("WM_DELETE_WINDOW", on_list_devices_popup_close)
+        # --- !! END NEW !! ---
+
         popup.title("Available MIDI Devices")
         popup.configure(bg=config.DARK_BG)
 
+        # --- Geometry (same as before) ---
         win_width = 400
         win_height = 600
         popup.update_idletasks()
@@ -550,35 +559,36 @@ class MidiSenderApp:
         x = (screen_width // 2) - (win_width // 2) + 100
         y = (screen_height // 2) - (win_height // 2) + 100
         popup.geometry(f"{win_width}x{win_height}+{x}+{y}")
+        # --- End Geometry ---
 
-        tk.Label(popup, text="Select a MIDI Device:", font=config.big_font, bg=config.DARK_BG, fg=config.DARK_FG).pack(pady=10)
+        tk.Label(popup, text="Available MIDI Devices:", # Changed title slightly
+                 font=config.big_font, bg=config.DARK_BG, fg=config.DARK_FG).pack(pady=10)
 
-        def select_new_device(device_name):
-            mode_type = "UNKNOWN"
-            actual_device = device_name
-
-            if device_name == config.DEVICE_NAME_CH2: mode_type = "USB_DIRECT"
-            elif device_name == config.DEVICE_NAME_BT: mode_type = "BT"
-            elif device_name == config.DEVICE_NAME_CH1:
-                actual_device = config.DEVICE_NAME_CH2
-                mode_type = "USB_DIRECT"
-
-            if mode_type == "UNKNOWN": mode_type = "CUSTOM_NO_RX"
-
-            # Save the manually selected device here
-            config.save_config(device=actual_device)
-            self._set_device_mode(mode_type, actual_device, should_relaunch=False)
-            popup.destroy()
+        # --- !! MODIFIED: Use Labels instead of Buttons !! ---
+        # Frame to hold the labels
+        list_frame = tk.Frame(popup, bg=config.DARK_BG)
+        list_frame.pack(pady=10, padx=10, fill="both", expand=True)
 
         for dev in device_list:
-            is_disabled = dev == "Microsoft GS Wavetable Synth" or dev.startswith("MIDIOUT")
-            btn = tk.Button(popup, text=dev, command=lambda d=dev: select_new_device(d),
-                      bg=config.BUTTON_BG if not is_disabled else config.DISABLED_BG,
-                      fg=config.DARK_FG if not is_disabled else "#999999",
-                      state="normal" if not is_disabled else "disabled",
-                      font=config.narrow_font_plain, width=40, pady=10)
-            btn.pack(pady=5)
+            # Determine color based on whether it's usually disabled
+            is_disabled_style = dev == "Microsoft GS Wavetable Synth" or dev.startswith("MIDIOUT")
+            label_fg = "#999999" if is_disabled_style else config.DARK_FG
+            label_bg = config.DARK_BG # Keep background consistent
 
+            # Create a Label for each device
+            lbl = tk.Label(
+                list_frame, # Add to the frame
+                text=dev,
+                font=config.narrow_font_plain,
+                width=40, # Keep width for alignment
+                pady=10, # Keep padding
+                bg=label_bg,
+                fg=label_fg,
+                anchor="w", # Align text to the left
+                justify="left"
+            )
+            lbl.pack(pady=3, fill="x") # Pack labels vertically, fill width
+        # --- !! END MODIFICATION !! ---
 
     def show_setlist_selection_popup(self):
         # (Function content unchanged - Keep previous version)
