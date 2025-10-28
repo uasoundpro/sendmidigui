@@ -7,3 +7,4 @@ debug_log.txt
 /__pycache__
 /gui/__pycache__
 *.csv
+MidiList_Set.csv

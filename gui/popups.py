@@ -25,6 +25,30 @@ def write_log(message):
         print(f"POPUP LOG FAIL: {e}. Message: {message}")
 # --- !! END DEBUG LOGGING !! ---
 
+# --- !! HELPER: ADD VERSION LABEL !! ---
+def _add_version_label(popup_window):
+    """Adds the version label to the top right of a Toplevel window."""
+    try:
+        tk.Label(
+            popup_window,
+            text=config.APP_VERSION,
+            font=config.narrow_font_small,
+            bg=config.DARK_BG,
+            fg="#888888" # Subtle grey
+        ).place(relx=1.0, rely=0, anchor="ne", x=-5, y=2) # Place in top-right corner
+    except Exception as e:
+        # Fallback in case config hasn't loaded
+        tk.Label(
+            popup_window,
+            text="v?.?.?",
+            font=("Arial", 9),
+            bg="#1e1e1e",
+            fg="#888888"
+        ).place(relx=1.0, rely=0, anchor="ne", x=-5, y=2)
+        write_log(f"Error adding version label: {e}")
+# --- !! END HELPER !! ---
+
+
 # --- !! HELPER: GET DEVICE LIST !! ---
 def _get_device_list():
     """Internal helper to get MIDI devices."""
@@ -34,10 +58,15 @@ def _get_device_list():
         device_list = result.stdout.strip().splitlines()
         # Filter out common junk devices
         filtered_list = [dev for dev in device_list if "Microsoft GS" not in dev and "MIDIOUT" not in dev]
+        if not filtered_list: # Handle case where only junk devices are found
+            return ["No Devices Found"]
         return filtered_list
+    except FileNotFoundError:
+        write_log(f"Error: {config.SENDMIDI_PATH} not found.")
+        return ["Error: sendmidi not found"]
     except Exception as e:
         write_log(f"Error listing devices in _get_device_list: {e}")
-        return ["Error: sendmidi not found"]
+        return ["Error listing devices"]
 
 # --- !! NEW DEVICE VERIFICATION POPUP !! ---
 def show_device_verification(root):
@@ -50,6 +79,7 @@ def show_device_verification(root):
         popup = tk.Toplevel(root)
         popup.title("Verify MIDI Devices")
         popup.configure(bg=config.DARK_BG)
+        _add_version_label(popup) # <--- ADDED VERSION
 
         win_width = 600
         win_height = 350 # Adjusted height
@@ -133,9 +163,11 @@ def show_initial_device_setup(root):
         popup = tk.Toplevel(root)
         popup.title("MIDI Device Setup") # Changed title slightly
         popup.configure(bg=config.DARK_BG)
+        _add_version_label(popup) # <--- ADDED VERSION
 
         win_width = 700
-        win_height = 450
+        # Increased height slightly for the refresh button
+        win_height = 500
         popup.update_idletasks()
         screen_width = popup.winfo_screenwidth()
         screen_height = popup.winfo_screenheight()
@@ -152,42 +184,12 @@ def show_initial_device_setup(root):
         # --- !! END FIX !! ---
 
         # Get the list of actual MIDI devices
-        available_devices = _get_device_list()
-        if not available_devices:
-            available_devices = ["No Devices Found"]
+        initial_devices = _get_device_list()
 
         # Variables
         ch1_device_var = tk.StringVar(popup)
         ch2_device_var = tk.StringVar(popup)
         bt_device_var = tk.StringVar(popup)
-
-        # --- Set defaults based on CURRENT config, not hardcoded ---
-        current_ch1 = config.DEVICE_NAME_CH1
-        current_ch2 = config.DEVICE_NAME_CH2
-        current_bt = config.DEVICE_NAME_BT
-
-        if current_ch1 and current_ch1 in available_devices:
-            ch1_device_var.set(current_ch1)
-        elif "Quad Cortex MIDI Control" in available_devices: # Fallback guess
-             ch1_device_var.set("Quad Cortex MIDI Control")
-        else:
-            ch1_device_var.set(available_devices[0])
-
-        if current_ch2 and current_ch2 in available_devices:
-            ch2_device_var.set(current_ch2)
-        elif "Morningstar MC8 Pro" in available_devices: # Fallback guess
-            ch2_device_var.set("Morningstar MC8 Pro")
-        else:
-            ch2_device_var.set(available_devices[0])
-
-        if current_bt and current_bt in available_devices:
-            bt_device_var.set(current_bt)
-        elif "loopMIDI Port" in available_devices: # Fallback guess
-            bt_device_var.set("loopMIDI Port")
-        else:
-            bt_device_var.set(available_devices[0])
-        # --- End Defaults Update ---
-
 
         # --- Widgets ---
         tk.Label(popup, text="Please map your MIDI devices:", # Changed text slightly
@@ -196,32 +198,127 @@ def show_initial_device_setup(root):
         main_frame = tk.Frame(popup, bg=config.DARK_BG)
         main_frame.pack(pady=10, padx=20, fill="x")
 
+        # Create OptionMenu widgets initially (will be populated/updated by _refresh_device_menus)
+        ch1_menu = tk.OptionMenu(main_frame, ch1_device_var, *["Initializing..."])
+        ch1_menu.config(font=config.narrow_font_plain, width=60)
+
+        ch2_menu = tk.OptionMenu(main_frame, ch2_device_var, *["Initializing..."])
+        ch2_menu.config(font=config.narrow_font_plain, width=60)
+
+        bt_menu = tk.OptionMenu(main_frame, bt_device_var, *["Initializing..."])
+        bt_menu.config(font=config.narrow_font_plain, width=60)
+
+        # --- !! REFRESH FUNCTION !! ---
+        def _refresh_device_menus():
+            """Gets the latest device list and updates the OptionMenus."""
+            write_log("Refreshing device list...")
+            available_devices = _get_device_list()
+            write_log(f"Found: {available_devices}")
+
+            # Store currently selected values before clearing
+            current_ch1_val = ch1_device_var.get()
+            current_ch2_val = ch2_device_var.get()
+            current_bt_val = bt_device_var.get()
+
+            # Update CH1 menu
+            menu1 = ch1_menu["menu"]
+            menu1.delete(0, "end")
+            for device in available_devices:
+                menu1.add_command(label=device, command=tk._setit(ch1_device_var, device))
+            # Try to restore selection, else default
+            if current_ch1_val in available_devices:
+                ch1_device_var.set(current_ch1_val)
+            elif config.DEVICE_NAME_CH1 and config.DEVICE_NAME_CH1 in available_devices:
+                 ch1_device_var.set(config.DEVICE_NAME_CH1)
+            elif "Quad Cortex MIDI Control" in available_devices:
+                 ch1_device_var.set("Quad Cortex MIDI Control")
+            elif available_devices:
+                ch1_device_var.set(available_devices[0])
+            else:
+                ch1_device_var.set("No Devices Found")
+
+
+            # Update CH2 menu
+            menu2 = ch2_menu["menu"]
+            menu2.delete(0, "end")
+            for device in available_devices:
+                menu2.add_command(label=device, command=tk._setit(ch2_device_var, device))
+            # Try to restore selection, else default
+            if current_ch2_val in available_devices:
+                ch2_device_var.set(current_ch2_val)
+            elif config.DEVICE_NAME_CH2 and config.DEVICE_NAME_CH2 in available_devices:
+                ch2_device_var.set(config.DEVICE_NAME_CH2)
+            elif "Morningstar MC8 Pro" in available_devices:
+                ch2_device_var.set("Morningstar MC8 Pro")
+            elif available_devices:
+                ch2_device_var.set(available_devices[0])
+            else:
+                 ch2_device_var.set("No Devices Found")
+
+            # Update BT menu
+            menu3 = bt_menu["menu"]
+            menu3.delete(0, "end")
+            for device in available_devices:
+                menu3.add_command(label=device, command=tk._setit(bt_device_var, device))
+            # Try to restore selection, else default
+            if current_bt_val in available_devices:
+                 bt_device_var.set(current_bt_val)
+            elif config.DEVICE_NAME_BT and config.DEVICE_NAME_BT in available_devices:
+                bt_device_var.set(config.DEVICE_NAME_BT)
+            elif "loopMIDI Port" in available_devices:
+                 bt_device_var.set("loopMIDI Port")
+            elif available_devices:
+                bt_device_var.set(available_devices[0])
+            else:
+                bt_device_var.set("No Devices Found")
+            write_log("Device menus refreshed.")
+        # --- !! END REFRESH FUNCTION !! ---
+
+        # Initial population
+        _refresh_device_menus()
+
+
         # --- CH1 (Quad Cortex) ---
         tk.Label(main_frame, text="CH1 Device (e.g., Quad Cortex):",
                  font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG).pack(anchor="w")
-        ch1_menu = tk.OptionMenu(main_frame, ch1_device_var, *available_devices)
-        ch1_menu.config(font=config.narrow_font_plain, width=60)
         ch1_menu.pack(fill="x", pady=(5, 15))
 
         # --- CH2 (Morningstar MC8) ---
         tk.Label(main_frame, text="CH2 / USB Device (e.g., Morningstar MC8):",
                  font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG).pack(anchor="w")
-        ch2_menu = tk.OptionMenu(main_frame, ch2_device_var, *available_devices)
-        ch2_menu.config(font=config.narrow_font_plain, width=60)
         ch2_menu.pack(fill="x", pady=(5, 15))
 
         # --- BT (loopMIDI) ---
         tk.Label(main_frame, text="Bluetooth Device (e.g., loopMIDI Port):",
                  font=config.narrow_font_plain, bg=config.DARK_BG, fg=config.DARK_FG).pack(anchor="w")
-        bt_menu = tk.OptionMenu(main_frame, bt_device_var, *available_devices)
-        bt_menu.config(font=config.narrow_font_plain, width=60)
         bt_menu.pack(fill="x", pady=(5, 15))
+
+        # --- Button Frame ---
+        button_frame = tk.Frame(popup, bg=config.DARK_BG)
+        button_frame.pack(pady=20)
+
+        # --- !! REFRESH BUTTON !! ---
+        refresh_button = tk.Button(button_frame, text="Refresh List", font=("Arial", 12),
+                                   bg="#444444", fg="white", command=_refresh_device_menus)
+        refresh_button.grid(row=0, column=0, padx=20)
+        # --- !! END REFRESH BUTTON !! ---
 
         def on_save():
             write_log("Saving selected device setup...")
             new_ch1 = ch1_device_var.get()
             new_ch2 = ch2_device_var.get()
             new_bt = bt_device_var.get()
+
+            # Prevent saving if error messages are selected
+            if "Error" in new_ch1 or "Error" in new_ch2 or "Error" in new_bt or \
+               "No Devices" in new_ch1 or "No Devices" in new_ch2 or "No Devices" in new_bt:
+                write_log("Save prevented due to error/no device selection.")
+                # Optionally show a message to the user here
+                tk.Label(popup, text="Cannot save with 'Error' or 'No Devices Found'. Please refresh and select valid devices.",
+                         fg="red", bg=config.DARK_BG).pack(pady=5)
+                return
+
+
             config.save_config(
                 DEVICE_NAME_CH1=new_ch1,
                 DEVICE_NAME_CH2=new_ch2,
@@ -235,9 +332,11 @@ def show_initial_device_setup(root):
             write_log("Save complete. Destroying setup popup.")
             popup.destroy()
 
-        save_button = tk.Button(popup, text="Save and Continue", font=("Arial", 16),
+        save_button = tk.Button(button_frame, text="Save and Continue", font=("Arial", 16),
                                 bg="#2a8f44", fg="white", command=on_save)
-        save_button.pack(pady=20)
+        # Position Save button next to Refresh button
+        save_button.grid(row=0, column=1, padx=20)
+
 
         write_log("Calling root.wait_window(popup) for device setup... (Window should be visible NOW)")
         root.wait_window(popup)
@@ -271,6 +370,7 @@ def show_setlist_chooser(root):
         
         popup.title("Load Setlist?")
         popup.configure(bg=config.DARK_BG)
+        _add_version_label(popup) # <--- ADDED VERSION
         
         write_log("Calculating geometry...")
         win_width = 600
@@ -337,6 +437,7 @@ def _show_setlist_file_picker(root):
         popup = tk.Toplevel(root)
         popup.title("Select Setlist File")
         popup.configure(bg=config.DARK_BG)
+        _add_version_label(popup) # <--- ADDED VERSION
         
         write_log("Calculating geometry for setlist picker...")
         win_width = 600
@@ -466,6 +567,7 @@ def show_device_chooser(root):
         popup = tk.Toplevel(root)
         popup.title("Select MIDI Device Mode") # Changed title
         popup.configure(bg=config.DARK_BG)
+        _add_version_label(popup) # <--- ADDED VERSION
 
         write_log("Calculating geometry for device chooser...")
         win_width = 900
@@ -533,12 +635,13 @@ def show_device_chooser(root):
             device_list = _get_device_list() # Use helper
             write_log(f"Found devices: {device_list}")
 
-            if not device_list or device_list == ["Error: sendmidi not found"]:
+            if not device_list or "Error" in device_list[0]:
                 write_log("No MIDI devices found or error.")
                 # Maybe show a small error message here?
                 return
 
             list_window = tk.Toplevel(popup)
+            _add_version_label(list_window) # <--- ADDED VERSION
             list_devices_popup_instance = list_window
 
             def on_list_devices_popup_close():
@@ -626,3 +729,4 @@ def show_device_chooser(root):
         write_log(traceback.format_exc())
         if popup and popup.winfo_exists():
             popup.destroy()
+

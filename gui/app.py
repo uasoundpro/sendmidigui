@@ -75,13 +75,37 @@ class MidiSenderApp:
             try:
                 error_popup = tk.Toplevel()
                 error_popup.title("FATAL ERROR")
+                self._add_version_label(error_popup) # <--- ADDED VERSION
                 tk.Label(error_popup, text=f"Failed to initialize app:\n{e}\n\nSee console for details.").pack(padx=20, pady=20)
                 tk.Button(error_popup, text="Quit", command=self.root.destroy).pack(pady=10)
             except:
                  if self.root and self.root.winfo_exists(): self.root.destroy()
 
+    # --- !! NEW HELPER METHOD FOR VERSION !! ---
+    def _add_version_label(self, popup_window):
+        """Adds the version label to the top right of a Toplevel window."""
+        try:
+            # Use config variables if they exist
+            font = config.narrow_font_small
+            bg = config.DARK_BG
+            version = config.APP_VERSION
+        except Exception:
+            # Fallback for crash handler popup before config is loaded
+            font = ("Arial", 9)
+            bg = "#1e1e1e"
+            version = "v?.?.?"
+            
+        tk.Label(
+            popup_window,
+            text=version,
+            font=font,
+            bg=bg,
+            fg="#888888" # Subtle grey
+        ).place(relx=1.0, rely=0, anchor="ne", x=-5, y=2) # Place in top-right corner
+    # --- !! END OF NEW METHOD !! ---
+
     def _setup_window(self):
-        self.root.title("MIDI Patch Sender v2.x.x EXPERIMENTAL")
+        self.root.title(f"MIDI Patch Sender {config.APP_VERSION} EXPERIMENTAL") # <--- UPDATED TITLE
         self.root.configure(bg=config.DARK_BG)
 
         if os.path.exists(config.ICON_FILE):
@@ -120,9 +144,16 @@ class MidiSenderApp:
 
         status_frame = tk.Frame(self.root, bg=config.DARK_BG)
         status_frame.pack(fill="x", pady=2, padx=2)
+        
         self.mode_label = tk.Label(status_frame, text=f"Current Mode: {self.mode_type}",
                                    fg=config.DARK_FG, bg=config.DARK_BG, font=("Arial", 12, "bold"))
         self.mode_label.pack(side="left", padx=4)
+
+        # --- !! ADDED VERSION LABEL TO MAIN GUI !! ---
+        version_label = tk.Label(status_frame, text=config.APP_VERSION,
+                                 font=config.narrow_font_small, bg=config.DARK_BG, fg="#888888")
+        version_label.pack(side="right", padx=6, anchor="n", pady=2)
+        # --- !! END VERSION LABEL !! ---
 
         setlist_display_frame = tk.Frame(self.root, bg=config.DARK_BG)
         setlist_display_frame.pack(fill="x", pady=5)
@@ -326,7 +357,10 @@ class MidiSenderApp:
             relaunch_command = [sys.executable, sys.argv[0], f"--relaunch={new_mode_type}"]
             # --- !! END MODIFICATION !! ---
 
-            subprocess.Popen(relaunch_command, env=new_env, creationflags=subprocess.CREATE_NO_WINDOW)
+            # --- !! MODIFIED: Removed creationflags=subprocess.CREATE_NO_WINDOW !! ---
+            # This will cause the new process to inherit the console window if one exists.
+            subprocess.Popen(relaunch_command, env=new_env)
+            # --- !! END MODIFICATION !! ---
 
             if self.root and self.root.winfo_exists(): self.root.destroy()
             return
@@ -494,6 +528,7 @@ class MidiSenderApp:
         self.device_switch_popup = popup
         popup.title("Select MIDI Device Mode")
         popup.configure(bg=config.DARK_BG)
+        self._add_version_label(popup) # <--- ADDED VERSION
 
         win_width = 900
         win_height = 550
@@ -539,6 +574,7 @@ class MidiSenderApp:
 
         popup = tk.Toplevel(self.root)
         self.list_devices_popup_window = popup # Store reference
+        self._add_version_label(popup) # <--- ADDED VERSION
 
         # --- !! NEW: Simple close function !! ---
         def on_list_devices_popup_close():
@@ -600,6 +636,7 @@ class MidiSenderApp:
         self.setlist_popup_window = popup
         popup.title("Select Setlist File")
         popup.configure(bg=config.DARK_BG)
+        self._add_version_label(popup) # <--- ADDED VERSION
 
         win_width = 600
         win_height = 600
@@ -680,6 +717,7 @@ class MidiSenderApp:
         self.device_change_popup = popup # Store reference
         popup.title(title)
         popup.configure(bg=config.DARK_BG)
+        self._add_version_label(popup) # <--- ADDED VERSION
 
         win_width = 800
         win_height = 400
@@ -791,6 +829,19 @@ class MidiSenderApp:
                 # --- !! END NEW !! ---
 
             elif event_type == "TRIGGER_FAILOVER":
+                # --- !! MODIFIED - ADDED FAILOVER WARNING POPUP !! ---
+                title = "USB DISCONNECTED - FAILOVER TO BLUETOOTH"
+                message = "Your USB MIDI device(s) have disconnected.\n\n" \
+                          "==> Please set up your Bluetooth connections (loopMIDI, etc.) NOW! <==\n\n" \
+                          "The app will restart in Bluetooth mode after you click OK."
+                ack_text = "OK, Relaunch in Bluetooth Mode"
+
+                # This popup will block until the user clicks OK (or closes the window)
+                # is_failback=False makes the title red
+                self._create_device_popup(title, message, ack_text, decline_text=None, is_failback=False)
+                # --- !! END MODIFICATION !! ---
+                
+                # This code now runs *after* the user acknowledges the popup
                 self.show_toast("USB Disconnected! Failing over to Bluetooth...", bg="red", duration=4000)
                 self._set_device_mode("BT", config.DEVICE_NAME_BT, should_relaunch=True)
 
@@ -811,3 +862,4 @@ class MidiSenderApp:
             print(f"---!! FATAL ERROR in handle_monitor_event !!---")
             print(f"Event: {event_type}, Data: {data}")
             traceback.print_exc()
+

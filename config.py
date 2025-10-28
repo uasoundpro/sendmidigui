@@ -3,6 +3,8 @@ import json
 import time
 import sys
 
+APP_VERSION = "v2.1.0" #2025-10-28
+
 # =================== FILE PATHS =====================
 # Resolve the script's location
 SCRIPT_PATH = os.path.dirname(os.path.abspath(sys.argv[0] if getattr(sys, 'frozen', False) else __file__))
