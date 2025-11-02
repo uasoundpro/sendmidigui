@@ -3,7 +3,7 @@ import json
 import time
 import sys
 
-APP_VERSION = "v2.1.1b" #2025-10-28
+APP_VERSION = "v2.1.2" #2025-11-02
 
 # =================== FILE PATHS =====================
 # Resolve the script's location
@@ -23,6 +23,11 @@ ICON_FILE = os.path.join(SCRIPT_PATH, "sendmidi.ico")
 DEVICE_NAME_BT = "loopMIDI Port"
 DEVICE_NAME_CH1 = "Quad Cortex MIDI Control" # CH1 (QC)
 DEVICE_NAME_CH2 = "Morningstar MC8 Pro"   # CH2 (MC8) / USB_DIRECT / HYBRID
+
+# --- !! NEW: Process name to monitor in BT Mode !! ---
+# (Assumes the executable is named this. Change if needed.)
+BT_PROCESS_MONITOR_NAME = "MIDIberry.exe" 
+# --- !! END NEW !! ---
 
 def reload_device_names(conf=None):
     """
@@ -53,6 +58,11 @@ USB_UNAVAILABLE_COLOR = "#b02f2f" # Red
 USB_AVAILABLE_ACTIVE_COLOR = "#207030" # Darker Green for click active
 USB_UNAVAILABLE_ACTIVE_COLOR = "#902020" # Darker Red for click active
 # --- END STATUS COLORS ---
+
+# --- !! NEW: BT Monitor App Colors !! ---
+BT_MONITOR_OK_COLOR = "#2a8f44" # Green
+BT_MONITOR_WARNING_COLOR = "#b02f2f" # Red
+# --- !! END NEW !! ---
 
 # =================== FONTS =====================
 big_font = ("Comic Sans MS", 20)

@@ -5,6 +5,16 @@ import threading
 import config
 import traceback # Import traceback
 
+# --- !! NEW: Import psutil for process checking !! ---
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+    print("psutil loaded. Process monitoring enabled.")
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    print("WARNING: 'psutil' library not found. Run 'pip install psutil' to enable app monitoring.")
+# --- !! END NEW !! ---
+
 class MidiManager:
     def __init__(self, gui_callback):
         self.gui_callback = gui_callback
@@ -50,6 +60,26 @@ class MidiManager:
         self.debug_enabled = enabled
         print(f"MidiManager debug state set to: {enabled}")
     # --- !! END ADDITION !! ---
+
+    # --- !! NEW: Helper function to check for running process !! ---
+    def _is_process_running(self, process_name):
+        """
+        Checks if a process with the given name is currently running.
+        (Requires psutil to be installed)
+        """
+        if not PSUTIL_AVAILABLE:
+            return None # Should be handled before calling, but as a safeguard
+            
+        try:
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'].lower() == process_name.lower():
+                    return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass # Process may have died as we were iterating
+        except Exception as e:
+            print(f"Error checking process list: {e}") # Log other errors
+        return False
+    # --- !! END NEW !! ---
 
     def send_midi(self, command_list):
         for command in command_list:
@@ -217,12 +247,25 @@ class MidiManager:
                 self._qc_midi_target_device = config.DEVICE_NAME_CH1
 
 
+            # --- !! NEW: Check for monitored BT process !! ---
+            bt_monitor_app_running = None # Default state (not applicable)
+            if self.mode_type == "BT":
+                if PSUTIL_AVAILABLE:
+                    # Check if the process is running
+                    bt_monitor_app_running = self._is_process_running(config.BT_PROCESS_MONITOR_NAME)
+                else:
+                    # Signal to GUI that psutil is missing
+                    bt_monitor_app_running = "psutil_missing" 
+            # --- !! END NEW !! ---
+
+
             # --- !! MODIFIED: Use 'both_usb_devices_present' for status !! ---
             status_data = {
                 "mode_label_text": mode_label_text,
                 "usb_devices_present": both_usb_devices_present, # Status reflects if *both* are OK
                 "current_mode": self.mode_type,
-                "ch1_override_active": ch1_override_active # --- !! NEW: Pass state to GUI !! ---
+                "ch1_override_active": ch1_override_active, # --- !! NEW: Pass state to GUI !! ---
+                "bt_monitor_app_running": bt_monitor_app_running # --- !! NEW: Pass BT app status !! ---
             }
             # --- !! END MODIFICATION !! ---
 
